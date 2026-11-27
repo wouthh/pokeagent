@@ -198,8 +198,12 @@ class Bench:
             (f"checkpoint {e['data']['file']}", (self.run_dir / "checkpoints" / e["data"]["file"]).read_bytes())
             for e in self.checkpoints()[-2:]
         ]
-        trial = self.game_class(
-            self.live.start(), self.live.adapter, registry=self.live.registry, library=self.live.library
+        trial = self.game_class(  # the live timeline store is the contract runs' starting point (read only)
+            self.live.start(),
+            self.live.adapter,
+            registry=self.live.registry,
+            library=self.live.library,
+            tkv=self.live.tkv,
         )
         try:
             report = validation.validate(trial, manifest, files, fixtures, states, scope, session, observations, taken)
