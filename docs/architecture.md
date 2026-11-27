@@ -121,9 +121,12 @@ text is stored in the repository; `gen1_map_names.txt` holds only the map consta
   must fail) fails closed.
 - No memory-write path exists. RAM reads are limited to RAM regions (never ROM banks).
 - The PreToolUse hook (`pokeagent hook web --log …`) logs every WebFetch/WebSearch and blocks:
-  - non-http(s) URLs and credentials in URLs;
-  - local or non-public hosts (IP literals, `localhost`, dotless names, `.local`/`.lan`/`.internal`/…), compared without a trailing DNS dot;
-  - percent-encoded and non-ASCII hostnames (the fetcher decodes or normalizes them, e.g. `127.0.0。1` to `127.0.0.1`);
+  - every URL that is not `http(s)://` plus a plain ASCII host name or IPv4 address (letters, digits, dots,
+    hyphens), an optional port and a printable-ASCII path. The fetcher parses URLs differently from Python
+    (backslashes as slashes, percent-decoded and Unicode-normalized hosts, userinfo), so anything else in the
+    authority is blocked rather than interpreted;
+  - local or non-public hosts (private and loopback IPv4, `localhost`, dotless names, numeric last labels such as
+    `127.1`, `.local`/`.lan`/`.internal`/…), compared without a trailing DNS dot;
   - token-like runs (24+ hex characters, or 32+ base64 characters mixing letters and digits), also in the hostname and in percent-decoded text;
   - path plus query, or search text, over 200 characters.
 

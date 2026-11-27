@@ -1,7 +1,7 @@
 """PreToolUse hook for the Claude sessions' WebFetch and WebSearch (`pokeagent hook web --log PATH`).
 
-Logs every request and blocks the ones that could carry data out or reach local services: non-http(s) URLs,
-local or private hosts, long token-like runs (hex or base64), and path/query or search text over 200 characters.
+Logs every request and blocks the ones that could carry data out or reach local services: anything but a plain
+http(s) URL with an ASCII host name, local or private hosts, long token-like runs (hex or base64), and path/query or search text over 200 characters.
 Exit code 2 blocks the call; the reason on stderr is shown to the model. Malformed input is blocked (fail closed).
 """
 
@@ -11,11 +11,15 @@ import re
 import sys
 import time
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote
 
 MAX_PAYLOAD = 200
 _TOKEN_RUNS = (re.compile(r"[0-9a-fA-F]{24,}"), re.compile(r"[A-Za-z0-9+/=]{32,}"))
 _LOCAL_SUFFIXES = (".local", ".localhost", ".internal", ".lan", ".home", ".arpa")
+# Only a plain host name or IPv4 address and an optional port, then a printable-ASCII path. The fetcher's URL parser
+# differs from Python's (backslashes, percent-encoding, Unicode dots, userinfo, IPv6 literals), so any authority
+# outside this shape is blocked instead of being interpreted.
+_URL = re.compile(r"(https?)://([a-z0-9.-]+)(?::\d{1,5})?([/?#][\x21-\x7e]*)?", re.IGNORECASE)
 
 
 def _token_like(text: str) -> bool:
@@ -36,7 +40,7 @@ def _host_problem(host: str) -> str | None:
     if not host:
         return "no host"
     try:
-        ip = ipaddress.ip_address(host.strip("[]"))
+        ip = ipaddress.ip_address(host)
     except ValueError:
         # A numeric last label (127.1, 0x7f.0.0.1) is an alternate IPv4 spelling; TLDs are never numeric.
         numeric_tld = re.fullmatch(r"\d+|0x[0-9a-f]*", host.rsplit(".", 1)[-1], re.IGNORECASE)
@@ -52,23 +56,14 @@ def decide(tool: str, tool_input: dict) -> str | None:
         url = tool_input.get("url")
         if not isinstance(url, str):
             return "missing url"
-        parts = urlsplit(url)
-        if parts.scheme not in ("http", "https"):
-            return f"scheme {parts.scheme!r} is not allowed"
-        if parts.username or parts.password:
-            return "credentials in the URL"
-        host = parts.hostname or ""
-        if "%" in host:
-            # The fetcher percent-decodes hostnames (127%2e0.0%2e1 is 127.0.0.1); only a plain host is allowed.
-            return "percent-encoded host"
-        if not host.isascii():
-            # The fetcher normalizes Unicode hosts (127.0.0。1 with U+3002 is 127.0.0.1); only ASCII hosts are allowed.
-            return "non-ASCII host"
+        if not (match := _URL.fullmatch(url)):
+            return "only plain http(s) URLs with an ASCII host name are allowed"
+        host = match.group(2).lower()
         if problem := _host_problem(host):
             return problem
         if _token_like(host):
             return "host contains a long token-like string"
-        payload = parts.path + ("?" + parts.query if parts.query else "")
+        payload = match.group(3) or ""
     elif tool == "WebSearch":
         payload = tool_input.get("query")
         if not isinstance(payload, str):
