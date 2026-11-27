@@ -254,7 +254,7 @@ class Runner:
         self.meta = json.loads((run_dir / "run.json").read_text())
         self.memory: Memory = server.memory
         self._actions = self.restarts = 0
-        self._after_lock = threading.Lock()  # a save and its write stay together, so recovery never regresses
+        self._after_lock = threading.Lock()  # a save and its write stay together, and a restart waits for them
         server.after_action, server.recover = self._after_action, self.recover
         (run_dir / "sessions").mkdir(exist_ok=True)
         (run_dir / "checkpoints").mkdir(exist_ok=True)
@@ -303,10 +303,11 @@ class Runner:
 
     def recover(self, error: str) -> bool:
         """Restart a failed emulator at the state after the last completed action; False once restarts run out."""
-        if self.restarts >= MAX_RESTARTS:
-            return False
-        self.restarts += 1
-        self.game.restart(latest_state(self.run_dir))
+        with self._after_lock:  # wait for an action's save and write, so the restart loads the newest state
+            if self.restarts >= MAX_RESTARTS:
+                return False
+            self.restarts += 1
+            self.game.restart(latest_state(self.run_dir))
         self.memory.event("restart", {"error": error})
         self.log("restart", f"the emulator was restarted after: {error}")
         return True

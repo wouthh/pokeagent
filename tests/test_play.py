@@ -261,6 +261,29 @@ def test_overlapping_actions_never_leave_an_older_recovery_state(tmp_path):
     assert latest_state(runner.run_dir) == b"state 2"
 
 
+def test_a_restart_waits_for_an_overlapping_actions_recovery_write(tmp_path):
+    runner, _, _ = make_runner(tmp_path, [])
+    game, first_saved, release = runner.game, threading.Event(), threading.Event()
+    original = game.save_state
+
+    def slow_save():
+        state = original()
+        first_saved.set()
+        release.wait(0.5)  # the restart tries to overtake here
+        return state
+
+    game.save_state = slow_save
+    action = threading.Thread(target=runner.server.after_action)
+    action.start()
+    assert first_saved.wait(5)
+    restart = threading.Thread(target=runner.recover, args=("worker exited",))
+    restart.start()
+    release.set()
+    action.join()
+    restart.join()
+    assert game.restarts == [b"state 1"]
+
+
 def test_restore_branches_a_timeline_and_the_brief_says_what_changed(tmp_path):
     runner, briefs, _ = make_runner(tmp_path, [(SessionResult("completed"), None)])
     memory, run_dir = runner.memory, runner.run_dir
