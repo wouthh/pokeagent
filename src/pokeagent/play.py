@@ -11,6 +11,7 @@ import io
 import json
 import operator
 import os
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -28,6 +29,7 @@ BUTTONS = ("a", "b", "start", "select", "up", "down", "left", "right")
 DIRECTIONS = ("up", "down", "left", "right")
 SETTLE_FRAMES = 20  # map events (Oak in Pallet Town) start a few frames after a walk ends
 KEEP_CHECKPOINTS = 10
+CONTEXT_FILES = ("notes.md", "state.json")
 CHECKPOINT_EVERY = 25  # actions
 MAX_FAILURES = 5
 OPS = {"==": operator.eq, "!=": operator.ne, ">=": operator.ge, ">": operator.gt, "<=": operator.le, "<": operator.lt}
@@ -190,6 +192,7 @@ class Runner:
         model: str | None = None,
         effort: str | None = None,
     ):
+        run_dir = run_dir.resolve()  # the Claude child runs with cwd=run_dir, so session paths must be absolute
         self.run_dir, self.game, self.server, self.provider, self.sleep = run_dir, game, server, provider, sleep
         self.budget, self.session_timeout, self.model, self.effort = budget, session_timeout, model, effort
         self.meta = json.loads((run_dir / "run.json").read_text())
@@ -220,9 +223,23 @@ class Runner:
         tmp = path.with_suffix(".tmp")
         tmp.write_bytes(self.game.save_state())
         tmp.replace(path)
+        for name in CONTEXT_FILES:  # timeline-bound context travels with its checkpoint
+            if (self.run_dir / name).exists():
+                shutil.copyfile(self.run_dir / name, path.with_suffix(f".{name}"))
         for old in sorted(folder.glob("*.state"))[:-KEEP_CHECKPOINTS]:
             old.unlink()
+            for name in CONTEXT_FILES:
+                old.with_suffix(f".{name}").unlink(missing_ok=True)
         self.log("checkpoint", f"{path.name} ({reason})")
+
+    def restore_context(self, checkpoint: Path) -> None:
+        """Replace the notes and progress with the ones saved at `checkpoint` (the discarded timeline's are dropped)."""
+        for name in CONTEXT_FILES:
+            saved = checkpoint.with_suffix(f".{name}")
+            if saved.exists():
+                shutil.copyfile(saved, self.run_dir / name)
+            else:
+                (self.run_dir / name).unlink(missing_ok=True)
 
     def _after_action(self) -> None:
         self._actions += 1
@@ -329,6 +346,7 @@ def play(
     speed: float | None = None,
 ) -> str:
     """Play a run from its latest checkpoint (or power-on) until something stops it; return why."""
+    run_dir = run_dir.resolve()
     meta = json.loads((run_dir / "run.json").read_text())
     rom = Path(meta["rom"])
     data = rom.read_bytes()
@@ -349,6 +367,8 @@ def play(
             viewer.frame = emu.frame()
         server = GameServer(game, run_dir / "notes.md", data_dir / "harness-issues.md", run_dir.name)
         runner = Runner(run_dir, game, server, model=model, effort=effort)
+        if checkpoints:
+            runner.restore_context(checkpoints[-1])
         origin = checkpoints[-1].name if checkpoints else "power-on"
         runner.log("start", f"{meta['game']}; {version}; from {origin}")
         url = server.start()

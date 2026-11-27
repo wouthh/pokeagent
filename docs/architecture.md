@@ -321,3 +321,6 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
   checkpoint restores the in-game save with everything else and saves cannot cross timelines.
 - **2026-11-27: Game names come from the user's ROM at runtime,** not from tables in the repository, and the walk grid
   is computed from the map and tileset data in RAM and ROM instead of hand-written maps.
+- **2026-11-27: Timeline-bound context is saved with each checkpoint.** `notes.md` and `state.json` are copied next to
+  the `.state` file and restored on resume, so a restored timeline never briefs the agent with progress it lost. Run
+  directories are resolved to absolute paths because the Claude child runs with the run directory as its cwd.
