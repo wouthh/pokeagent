@@ -95,12 +95,21 @@ class Emulator:
         if blob:
             fields["n"] = len(blob)
         out = memoryview(json.dumps(fields).encode() + b"\n" + blob)
+        deadline = time.monotonic() + self.timeout
+        wfd = self._proc.stdin.fileno()
+        os.set_blocking(wfd, False)
         try:
             while out:
-                out = out[os.write(self._proc.stdin.fileno(), out) :]
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not select.select([], [wfd], [], remaining)[1]:
+                    sandbox.kill(self._proc)
+                    raise EmulatorError(f"emulator worker did not accept the request within {self.timeout:g}s")
+                try:
+                    out = out[os.write(wfd, out) :]
+                except BlockingIOError:
+                    continue
         except BrokenPipeError:
             raise EmulatorError("emulator worker exited") from None
-        deadline = time.monotonic() + self.timeout
         head = json.loads(self._read_until(lambda: self._buf.find(b"\n") + 1, MAX_LINE, deadline))
         n = head.get("n", 0)
         if not 0 <= n <= MAX_BLOB:
