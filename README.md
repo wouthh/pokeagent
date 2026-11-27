@@ -68,6 +68,9 @@ one always runs.
 
 Each run lives in `~/.local/share/pokeagent/runs/<id>/`: `play.log` shows every message and action, `notes.md` the
 agent's own notes. Ctrl-C stops a run after saving a checkpoint; closing the `--watch` window only stops watching.
+When the agent makes no progress for many actions, pokeagent escalates from notices to a pause for reflection, a new
+session, a restore of the last checkpoint after its progress and finally stops the run as `stuck`; `resume`
+continues it.
 
 The default objective completes when the game reaches the Hall of Fame. A custom objective completes only with your
 `--success` check. Without one, the agent may propose a check or report the objective complete, and the run then

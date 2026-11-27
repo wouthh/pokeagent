@@ -42,6 +42,7 @@ class Session:
     next_focus: str | None = None
     claim: str | None = None
     request: int | None = None  # a development request made in this session
+    must_reflect: bool = False  # the stuck ladder holds actions until reflect
     ended: bool = False
 
 
@@ -58,7 +59,8 @@ class GameServer:
         self.bench = None  # the develop session's Bench while one runs
         self.dev_url: str | None = None
         self._servers: list[tuple[uvicorn.Server, threading.Thread]] = []
-        self.after_action = None  # called after every action (the runner's recovery state and checkpoints)
+        self.after_action = None  # called after every action (the runner's recovery state, checkpoints and stuck
+        # ladder); returns (level the ladder climbed to or 0, notice for the agent or "")
         self.recover = None  # called with the error when the emulator fails; True once it runs again
         self.broken: str | None = None  # set once the emulator fails for good; game tools then refuse
         self._uvicorn: uvicorn.Server | None = None
@@ -148,12 +150,19 @@ class GameServer:
                 raise ToolError("this session has ended; stop now")
             if session.actions >= session.budget:
                 raise ToolError(f"the action budget ({session.budget}) is used up: update your notes, then end_session")
+            if session.must_reflect:
+                raise ToolError("pokeagent's stuck ladder holds your actions until you call reflect(analysis, plan)")
             session.actions += 1
             text, png = await on_game(call or partial(self.game.act, name, **args))
+            climbed, notice = 0, ""
             if self.after_action:  # an action whose recovery state was not saved is undone by a restart: no event
-                await on_game(self.after_action)
+                climbed, notice = await on_game(self.after_action)
             outcome = {"name": name, "args": args, "outcome": text.split("\n", 1)[0]}
             text = f"[event {self.memory.event('action', outcome, session.number)}] {text}"
+            if notice:
+                text += f"\n\n{notice}"
+            session.must_reflect = session.must_reflect or climbed == 2
+            session.ended = session.ended or climbed >= 3
             return [text, Image(data=png, format="png")] if png else text
 
         @tool
@@ -358,6 +367,18 @@ class GameServer:
             self._session(ctx)
             found = self.game.registry.active()
             return "\n".join(capabilities.summary(self.game.registry, c) for c in found) or "none defined yet"
+
+        @tool
+        def reflect(analysis: str, plan: str, ctx: Context) -> str:
+            """Step back from the game: what is going wrong or could go better, and what you will do differently.
+            Free. When pokeagent says you are stuck, your actions wait for this."""
+            session = self._session(ctx)
+            if not all(isinstance(v, str) and v.strip() for v in (analysis, plan)):
+                raise ToolError("analysis and plan must be described")
+            data = {"analysis": analysis[:2000], "plan": plan[:2000]}
+            event = self.memory.event("reflection", data, session.number)
+            session.must_reflect = False
+            return f"Recorded as event {event}. Carry on with your plan."
 
         @tool
         def request_development(
