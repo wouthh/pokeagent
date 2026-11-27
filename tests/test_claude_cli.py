@@ -155,6 +155,30 @@ def test_init_rejection_kills_session(tmp_path):
     assert not list(tmp_path.glob("*.mcp.json"))
 
 
+@pytest.mark.parametrize("events", [[RESULT], [{"type": "assistant", "message": {"content": []}}, RESULT], []])
+def test_missing_init_is_rejected(tmp_path, events):
+    with pytest.raises(cc.InitRejected, match="init"):
+        cc.run_session(spec(tmp_path), claude=fake_claude(tmp_path, events))
+
+
+def test_malformed_init_is_rejected(tmp_path):
+    bad = {**INIT, "tools": [1]}
+    with pytest.raises(cc.InitRejected, match="malformed"):
+        cc.run_session(spec(tmp_path), claude=fake_claude(tmp_path, [bad, RESULT], sleep=30))
+
+
+def test_callback_failure_kills_session(tmp_path):
+    def boom(kind, data):
+        raise RuntimeError("callback")
+
+    assistant = {"type": "assistant", "message": {"content": [{"type": "text", "text": "hi"}]}}
+    start = time.monotonic()
+    with pytest.raises(RuntimeError, match="callback"):
+        cc.run_session(spec(tmp_path), boom, claude=fake_claude(tmp_path, [INIT, assistant], sleep=30))
+    assert time.monotonic() - start < 10
+    assert not list(tmp_path.glob("*.mcp.json"))
+
+
 def test_max_turns_is_a_normal_end(tmp_path):
     end = {
         **RESULT,
