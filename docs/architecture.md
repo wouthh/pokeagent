@@ -238,7 +238,8 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
 - **Brief:** objective; each check with its source and whether it holds now; the latest proposal; the observations
   with their values; a rejected claim; the last summary (or one generated from the session's last actions when it
   ended without `end_session`); notes; the top 5 knowledge entries matching the current map and the planned focus;
-  a restore since the last session; the current state.
+  where recent play went (the last five play sessions' actions, milestones and cost, and the last one's most repeated
+  actions and three-action sequences, as numbers without advice); a restore since the last session; the current state.
 - **Restore:** `pokeagent restore RUN` lists the checkpoints of the current timeline's history (its own, and its
   ancestors' up to where it branched); `pokeagent restore RUN CHECKPOINT` takes a stopped run back to one:
   - refused when the checkpoint was saved with another ROM, core or core options than the run's;

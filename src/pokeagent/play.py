@@ -566,6 +566,8 @@ class Runner:
         if hits := self.memory.search(f"{self.game.location()} {progress.get('next_focus') or ''}", KNOWLEDGE_HITS):
             lines += ["", "Knowledge that may bear on this (knowledge_search finds more):"]
             lines += [describe_knowledge(entry) for entry in hits]
+        if efficiency := stats.efficiency(self.memory):
+            lines += ["", *efficiency]
         if found := self.game.registry.active():
             lines += ["", "Your observations, macros and tools:"]
             lines += [capabilities.summary(self.game.registry, c) for c in found]

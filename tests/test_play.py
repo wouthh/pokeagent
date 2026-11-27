@@ -20,6 +20,8 @@ from pokeagent.play import Game, Runner, latest_state, new_run, play, restorable
 from pokeagent.server import GameServer
 from pokeagent.validation import validate
 
+WALK = {"name": "walk", "args": {"direction": "up", "steps": 1}}
+
 
 class FakeGame:
     adapter, viewer = Gen1, None  # Gen1 for its progress score
@@ -134,7 +136,7 @@ def test_the_brief_carries_knowledge_and_a_generated_summary(tmp_path):
     def acting(spec, on_event):
         session = runner.server.sessions[spec.token]
         session.actions = 2
-        memory.event("action", {"outcome": "walk: blocked after 0 step(s)"}, session.number)
+        memory.event("action", WALK | {"outcome": "walk: blocked after 0 step(s)"}, session.number)
         if session.number == 1:
             spec_ = check_macro(
                 {"name": "spin", "description": "turn around", "steps": [{"do": "walk"}]}, set(), set(), set()
@@ -151,6 +153,7 @@ def test_the_brief_carries_knowledge_and_a_generated_summary(tmp_path):
     assert "walk: blocked after 0 step(s)" in briefs[1]
     assert "spin version 2 was rolled back (it kept failing); version 1 is active again" in briefs[1]
     assert "spin (macro v1, rom; no params; unused): turn around" in briefs[1]
+    assert "Recent play sessions (actions, milestones, cost): session 1: 2, 0, $" in briefs[1]
     assert [e["data"]["actions"] for e in memory.events("session_end")] == [2, 2]
 
 
@@ -189,7 +192,7 @@ def test_a_development_request_runs_a_develop_session_within_the_policy(tmp_path
             runner.server.bench.reports.append({"passed": True, "version": 1})
             session.summary = "built step"
         elif session.number in (1, 3):
-            action = runner.memory.event("action", {"outcome": "walk: blocked after 0 step(s)"}, session.number)
+            action = runner.memory.event("action", WALK | {"outcome": "walk: blocked after 0 step(s)"}, session.number)
             ask = {"tool": "step", "evidence": [action], "problem": "p", "expected_benefit": "b", "proposal": "q"}
             session.request = runner.memory.event("development_requested", ask, session.number)
         return replay(spec, on_event)
@@ -699,7 +702,7 @@ def test_restore_branches_a_timeline_and_the_brief_says_what_changed(tmp_path):
     first = memory.timeline()
     for _ in range(3):
         runner.server.after_action()
-        memory.event("action", {"outcome": "walk: moved"}, 2)
+        memory.event("action", WALK | {"outcome": "walk: moved"}, 2)
     delivered = memory.add_knowledge("progress", "Parcel", "delivered", scope="run")
     notes.write_text("go to Viridian\nOak gave me the Pokédex\n")
     progress.write_text(json.dumps({"sessions": 4, "summary": "delivered the parcel", "next_focus": "Route 2"}))
