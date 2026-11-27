@@ -261,6 +261,7 @@ class Runner:
     def restore_context(self, checkpoint: Path) -> None:
         """Replace the notes and progress with the ones saved at `checkpoint` (the discarded timeline's are dropped)."""
         self.memory.discard_progress_after(checkpoint.name)
+        self.memory.event("restore", {"file": checkpoint.name})  # actions before this belong to a discarded attempt
         for name in CONTEXT_FILES:
             saved = checkpoint.with_suffix(f".{name}")
             if saved.exists():
@@ -366,7 +367,11 @@ class Runner:
             if session.summary:
                 progress["summary"], progress["next_focus"] = session.summary, session.next_focus
             elif session.actions:
-                last = "; ".join(e["data"]["outcome"] for e in self.memory.events("action", session=number, limit=5))
+                restored = self.memory.events("restore", limit=1)
+                after = restored[0]["id"] if restored else 0
+                last = "; ".join(
+                    e["data"]["outcome"] for e in self.memory.events("action", session=number, after=after, limit=5)
+                )
                 progress["summary"] = (
                     f"(no summary: session {number} ended with {result.end} after {session.actions} actions;"
                     f" its last actions: {last})"
