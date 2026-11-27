@@ -122,8 +122,8 @@ text is stored in the repository; `gen1_map_names.txt` holds only the map consta
 - No memory-write path exists. RAM reads are limited to RAM regions (never ROM banks).
 - The PreToolUse hook (`pokeagent hook web --log …`) logs every WebFetch/WebSearch and blocks:
   - non-http(s) URLs and credentials in URLs;
-  - local or non-public hosts (IP literals, `localhost`, dotless names, `.local`/`.lan`/`.internal`/…);
-  - token-like runs (24+ hex characters, or 32+ base64 characters mixing letters and digits);
+  - local or non-public hosts (IP literals, `localhost`, dotless names, `.local`/`.lan`/`.internal`/…), compared without a trailing DNS dot;
+  - token-like runs (24+ hex characters, or 32+ base64 characters mixing letters and digits), also in the hostname and in percent-decoded text;
   - path plus query, or search text, over 200 characters.
 
   Malformed hook input is blocked too.

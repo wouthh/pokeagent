@@ -11,7 +11,7 @@ import re
 import sys
 import time
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 MAX_PAYLOAD = 200
 _TOKEN_RUNS = (re.compile(r"[0-9a-fA-F]{24,}"), re.compile(r"[A-Za-z0-9+/=]{32,}"))
@@ -19,6 +19,10 @@ _LOCAL_SUFFIXES = (".local", ".localhost", ".internal", ".lan", ".home", ".arpa"
 
 
 def _token_like(text: str) -> bool:
+    # Check every percent-decoding level too: %-encoding each character would otherwise split any run.
+    seen = text
+    while (decoded := unquote(seen)) != seen:
+        text, seen = text + "\n" + decoded, decoded
     for pattern in _TOKEN_RUNS:
         for match in pattern.finditer(text):
             run = match.group()
@@ -28,13 +32,14 @@ def _token_like(text: str) -> bool:
 
 
 def _host_problem(host: str) -> str | None:
+    host = host.rstrip(".")  # an absolute DNS name (localhost., router.lan.) is the same host
     if not host:
         return "no host"
     try:
         ip = ipaddress.ip_address(host.strip("[]"))
     except ValueError:
         # A numeric last label (127.1, 0x7f.0.0.1) is an alternate IPv4 spelling; TLDs are never numeric.
-        numeric_tld = re.fullmatch(r"\d+|0x[0-9a-f]*", host.rstrip(".").rsplit(".", 1)[-1], re.IGNORECASE)
+        numeric_tld = re.fullmatch(r"\d+|0x[0-9a-f]*", host.rsplit(".", 1)[-1], re.IGNORECASE)
         if host == "localhost" or "." not in host or numeric_tld or host.endswith(_LOCAL_SUFFIXES):
             return f"local host {host}"
         return None
@@ -54,6 +59,8 @@ def decide(tool: str, tool_input: dict) -> str | None:
             return "credentials in the URL"
         if problem := _host_problem(parts.hostname or ""):
             return problem
+        if _token_like(parts.hostname or ""):
+            return "host contains a long token-like string"
         payload = parts.path + ("?" + parts.query if parts.query else "")
     elif tool == "WebSearch":
         payload = tool_input.get("query")
