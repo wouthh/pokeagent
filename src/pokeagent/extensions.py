@@ -302,13 +302,21 @@ class Runner:
                 return result
         raise ValueError(f"unknown ctx request {method!r}")
 
-    def _act(self, method: str, args: dict, budget: Budget, depth: int):
-        game = self.game
-        if time.monotonic() > budget.deadline or game.frames > budget.frame_end:
+    def _charge(self, action: str, args: dict, budget: Budget):
+        """One builtin action of a macro, under the tool's shared budget."""
+        self._spend(budget, _cost(action, args))
+        return self.game._do(action, args)
+
+    def _spend(self, budget: Budget, inputs: int) -> None:
+        if time.monotonic() > budget.deadline or self.game.frames > budget.frame_end:
             raise _Violation("the call's budget of frames or time is used up")
-        budget.inputs -= args.get("times", 1) if method == "press" else 1
+        budget.inputs -= inputs
         if budget.inputs < 0:
             raise _Violation("the call's budget of controller inputs is used up")
+
+    def _act(self, method: str, args: dict, budget: Budget, depth: int):
+        game = self.game
+        self._spend(budget, _cost(method, args))
         match method:
             case "press":
                 return game._do("press", {"button": args.get("button"), "times": args.get("times", 1)})
@@ -332,7 +340,11 @@ class Runner:
             raise ValueError(f"no builtin action or active capability named {name!r}")
         if found["kind"] == "macro":
             return capabilities.execute(
-                found["spec"], call_args, game._do, game._observations, lambda n: game.registry.get(n, "macro")["spec"]
+                found["spec"],
+                call_args,
+                lambda action, action_args: self._charge(action, action_args, budget),
+                game._observations,
+                lambda n: game.registry.get(n, "macro")["spec"],
             )
         if found["kind"] == "observation":
             raise ValueError(f"{name} is an observation; use ctx.observe")
@@ -368,6 +380,11 @@ class Runner:
         return None
 
 
+def _cost(action: str, args: dict) -> int:
+    times = args.get("times", 1)
+    return times if action == "press" and isinstance(times, int) and times > 0 else 1
+
+
 class _Violation(CapabilityError):
     """Ends the call at once: the extension cannot catch it as a refused request."""
 
@@ -398,7 +415,11 @@ class _Pipe:
             self._wait(read=True)
             chunk = os.read(self.proc.stdout.fileno(), 1 << 16)
             if not chunk:
-                raise CapabilityError(f"the extension's process exited ({self.proc.wait()}) without a result")
+                try:
+                    code = self.proc.wait(max(self.deadline - time.monotonic(), 0))
+                except subprocess.TimeoutExpired:
+                    raise _Violation("the call ran out of time and was stopped") from None
+                raise CapabilityError(f"the extension's process exited ({code}) without a result")
             self.buf += chunk
         line = bytes(self.buf[:end])
         del self.buf[: end + 1]
