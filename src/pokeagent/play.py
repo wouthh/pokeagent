@@ -477,15 +477,24 @@ def restore(run_dir: Path, memory: Memory, name: str) -> dict:
         for e in memory.events("action", after=target["id"], limit=-1)
         if e["created"] <= history.get(e["timeline"], -1)
     )
-    stale = memory.branch(target)
-    write_atomic(run_dir / "recovery.state", path.read_bytes())
+    # Read and write every file before the timeline changes, so a failure (disk full) leaves the run as it was.
     saved_notes = path.with_suffix(".notes.md")
     new_notes = saved_notes.read_text() if saved_notes.exists() else ""
-    write_atomic(notes, new_notes.encode())
     saved_progress = path.with_suffix(".state.json")
     restored = json.loads(saved_progress.read_text()) if saved_progress.exists() else {}
     restored["sessions"] = progress["sessions"]
-    progress_file.write_text(json.dumps(restored, indent=1) + "\n")
+    old_state = (run_dir / "recovery.state").read_bytes() if (run_dir / "recovery.state").exists() else None
+    try:
+        write_atomic(run_dir / "recovery.state", path.read_bytes())
+        write_atomic(notes, new_notes.encode())
+        write_atomic(progress_file, (json.dumps(restored, indent=1) + "\n").encode())
+        stale = memory.branch(target)
+    except BaseException:
+        if old_state is not None:
+            write_atomic(run_dir / "recovery.state", old_state)
+        write_atomic(notes, old_notes.encode())
+        write_atomic(progress_file, (json.dumps(progress, indent=1) + "\n").encode())
+        raise
     kept = set(new_notes.splitlines())
     data = {
         "file": name,
