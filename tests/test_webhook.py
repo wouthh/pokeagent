@@ -12,6 +12,10 @@ from pokeagent import webhook
         "https://bulbapedia.bulbagarden.net/wiki/Pok%C3%A9mon_Red_and_Blue_Versions",
         "https://www.serebii.net/rb/pokemon.shtml",
         "https://github.com/pret/pokered/blob/master/ram/wram.asm",
+        # blocked in live run 1 as token-like before slashes ended a run
+        "https://api.github.com/repos/pret/pokered/contents/maps/Route9.blk",
+        "https://raw.githubusercontent.com/pret/pokered/master/scripts/RocketHideoutB3F.asm",
+        "https://github.com/pret/pokered/blob/master/scripts/RocketHideoutB3F.asm",
         "https://example.com/pokemon-red-blue-walkthrough-part-one-pallet-town-to-viridian",
     ],
 )
@@ -54,6 +58,7 @@ def test_allows_ordinary_pages(url):
         "https://example.com/?q=" + "a" * 250,
         "https://example.com/c/3f9a2b7c4d5e6f708192a3b4c5d6e7f8",
         "https://example.com/?d=U2FsdGVkX19vY2tlbnRva2VuMTIzNDU2Nzg5MA==",
+        "https://example.com/a/U2FsdGVkX19vY2tlbnRva2VuMTIzNDU2Nzg5MA/b",
     ],
 )
 def test_blocks_local_and_payload_urls(url):

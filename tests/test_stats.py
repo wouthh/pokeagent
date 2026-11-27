@@ -56,7 +56,9 @@ def test_status_and_the_cli(tmp_path, capsys):
     (run_dir / "state.json").write_text(json.dumps({"sessions": 2, "next_focus": "beat Brock"}))
     memory = played(data, "a", 1.0)
     memory.add_knowledge("map", "Pewter City", "the gym is north")
-    text = stats.status(memory, run_dir, "session 3 (play)")
+    assert stats.status(memory, run_dir).startswith("Run a: stopped, resume continues it\nObjective")
+    with play.run_lock(run_dir):
+        text = stats.status(memory, run_dir, "session 3 (play)")
     assert text.startswith("Run a: running; now session 3 (play)\nObjective: finish the game")
     assert "Sessions: 1 play, 1 develop; 2 actions, 2,000 tokens, $1.50; timeline 1" in text
     assert "Planned focus: beat Brock" in text and "Milestones: first visit to Pallet Town; badge 1" in text
