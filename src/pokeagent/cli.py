@@ -35,6 +35,10 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--effort", help="reasoning effort for the sessions")
         p.add_argument("--watch", action="store_true", help="show the game in a window")
         p.add_argument("--watch-speed", type=float, help="emulation speed, a multiple of real time (default: uncapped)")
+        p.add_argument("--dev-share", type=float, default=0.3, help="most of the run's tokens development may use")
+        p.add_argument("--dev-attempts", type=int, default=2, help="development sessions per tool")
+        p.add_argument("--dev-timeout", type=float, default=45, help="minutes per development session")
+        p.add_argument("--dev-validations", type=int, default=10, help="validations per development session")
     objective = commands.add_parser("objective", help="settle a run's completion claim or approve its proposed check")
     objective.add_argument("action", choices=["confirm", "reject", "approve-check"])
     objective.add_argument("run", help="run id or run folder")
@@ -148,6 +152,12 @@ def main(argv: list[str] | None = None) -> int:
                 effort=args.effort,
                 watch=args.watch,
                 speed=args.watch_speed,
+                development={
+                    "dev_share": args.dev_share,
+                    "dev_attempts": args.dev_attempts,
+                    "dev_timeout": args.dev_timeout * 60,
+                    "dev_validations": args.dev_validations,
+                },
             )
         except (OSError, ValueError, RuntimeError) as e:  # includes ProviderError, SandboxError, EmulatorError
             print(f"pokeagent: {e}", file=sys.stderr)

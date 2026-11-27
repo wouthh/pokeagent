@@ -9,6 +9,7 @@ from pokeagent import objectives
 from pokeagent import play as play_module
 from pokeagent.agents.claude_cli import ProviderError, SessionResult
 from pokeagent.capabilities import Registry, check_macro, check_observation
+from pokeagent.develop import Bench
 from pokeagent.emulator.client import Emulator, EmulatorError
 from pokeagent.emulator.cores import core_path
 from pokeagent.extensions import install
@@ -148,6 +149,55 @@ def test_staged_tools_become_active_at_the_next_session_after_a_checkpoint(tmp_p
     assert runner.game.registry.get("step", "tool")["status"] == "active"
     assert "step version 1 (tool) is now active" in briefs[0]
     assert runner.memory.events("checkpoint")[0]["data"]["reason"] == "before activating validated tools"
+
+
+class FakeBench:
+    def __init__(self, run_dir, request, live, game_class, checkpoints, max_validations):
+        self.live, self.request, self.reports, self.closed = live, request, [], False
+
+    def ws_list(self):
+        return "(empty)"
+
+    def close(self):
+        self.closed = True
+
+
+def test_a_development_request_runs_a_develop_session_within_the_policy(tmp_path):
+    results = [(SessionResult("completed"), "walking wastes actions")] + [(SessionResult("completed"), None)] * 3
+    runner, briefs, _ = make_runner(tmp_path, results)
+    runner.bench_class, runner.dev_attempts, runner.server.dev_url = FakeBench, 1, "http://127.0.0.1:2/mcp"
+    replay, specs, benches = runner.provider, [], []
+
+    def scripted(spec, on_event):
+        specs.append(spec)
+        session = runner.server.sessions[spec.token]
+        if session.mode == "develop":
+            benches.append(runner.server.bench)
+            runner.server.bench.reports.append({"passed": True, "version": 1})
+            session.summary = "built step"
+        elif session.number in (1, 3):
+            action = runner.memory.event("action", {"outcome": "walk: blocked after 0 step(s)"}, session.number)
+            ask = {"tool": "step", "evidence": [action], "problem": "p", "expected_benefit": "b", "proposal": "q"}
+            session.request = runner.memory.event("development_requested", ask, session.number)
+        return replay(spec, on_event)
+
+    runner.provider = scripted
+    assert runner.loop("http://127.0.0.1:1/mcp", max_sessions=4) == "max_sessions"
+    develop_spec = specs[1]
+    assert develop_spec.mcp_url == "http://127.0.0.1:2/mcp" and develop_spec.system_prompt_file.name == "develop.md"
+    assert "Problem: p" in briefs[1] and "walk: blocked after 0 step(s)" in briefs[1] and "attempt 1 of 1" in briefs[1]
+    assert benches[0].closed and runner.server.bench is None
+    assert "Development session 2 for step (attempt 1): version 1 validated. Its summary: built step" in briefs[2]
+    assert "walking wastes actions" in briefs[2]  # the last play summary, not the develop session's
+    assert "request for step did not run: step already had 1 development session(s)" in briefs[3]
+    cycle = runner.memory.events("development_cycle")[0]["data"]
+    assert (cycle["staged"], cycle["validations"]) == (1, 1)
+    assert [e["data"].get("mode", "play") for e in runner.memory.events("session_end", limit=-1)] == [
+        "play",
+        "develop",
+        "play",
+        "play",
+    ]
 
 
 def test_the_check_waits_for_a_game_in_progress(tmp_path):
@@ -322,6 +372,47 @@ def test_each_contract_run_starts_with_empty_scratch_stores(game, tmp_path):
     manifest = {"name": "step", "description": "d", "examples": [{}, {}]}
     report = validate(trial, manifest, files, {}, [("live", bedroom)], "rom", 1, set(OBSERVATIONS), set())
     assert report["passed"], report
+
+
+def test_the_development_bench_leaves_the_live_game_alone_and_stages_a_tool(game, rom_path, tmp_path):
+    gen1, _, bedroom = game
+    memory = Memory(tmp_path / "memory.db", "run")
+    memory.open_run({"objective": "x", "rom_sha1": "red", "family": "pokemon-gen1"})
+
+    def start():
+        return Emulator(core_path(CORE), rom_path, options=CORE_OPTIONS)
+
+    live = Game(start(), gen1, start=start, registry=Registry(memory), library=tmp_path / "library")
+    live.load_state(bedroom)
+    x = live.observations()["x"]
+    bench = Bench(tmp_path / "run", {"tool": "step"}, live, Game, lambda: [])
+    try:
+        bench.snapshot("before")
+        bench.game.act("walk", direction="right")
+        assert bench.game.observations()["x"] == x + 1 and live.observations()["x"] == x
+        assert "byte(s) differ" in bench.diff("before") and "0xd362" in bench.search(x + 1)  # wXCoord
+        bench.fixture_save("moved")
+        bench.ws_write(
+            "manifest.json", json.dumps({"name": "step", "description": "one step right", "effects": ["position"]})
+        )
+        bench.ws_write(
+            "tool.py", "def run(ctx):\n    ctx.call('walk', direction='right')\n    return ctx.observe('x')\n"
+        )
+        bench.ws_write(
+            "test_tool.py",
+            "def test_moves(ctx):\n    ctx.load_fixture('moved')\n    x = ctx.observe('x')\n"
+            "    assert ctx.call('step') == x + 1\n",
+        )
+        names = set(OBSERVATIONS)
+        report = bench.validate("rom", 2, names, names)
+        assert report["passed"], report
+        assert "contract on fixture moved" in [s["step"] for s in report["steps"]]
+        assert [c["name"] for c in live.registry.staged()] == ["step"] and live.observations()["x"] == x
+        bench.load()
+        assert bench.game.observations()["x"] == x
+    finally:
+        bench.close()
+        live.emu.close()
 
 
 def test_a_relative_run_dir_becomes_absolute(tmp_path, monkeypatch):

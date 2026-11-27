@@ -2,6 +2,7 @@ import asyncio
 import io
 import urllib.error
 import urllib.request
+from types import SimpleNamespace
 
 import httpx2
 import pytest
@@ -73,6 +74,19 @@ def call(url, token, tool, args=None):
         ):
             await session.initialize()
             return await session.call_tool(tool, args or {})
+
+    return asyncio.run(go())
+
+
+def tools(url, token) -> set[str]:
+    async def go():
+        async with (
+            httpx2.AsyncClient(headers={"Authorization": f"Bearer {token}"}) as http,
+            streamable_http_client(url, http_client=http) as (read, write),
+            ClientSession(read, write) as session,
+        ):
+            await session.initialize()
+            return {t.name for t in (await session.list_tools()).tools}
 
     return asyncio.run(go())
 
@@ -204,3 +218,42 @@ def test_capability_tools(server):
     assert session.actions == 6  # every run_macro call is one action
     assert "no active tool" in text(use("run_tool", name="climb"))  # a macro is not a tool
     assert session.actions == 7
+
+
+def test_play_and_develop_sessions_each_have_their_own_port_and_tools(server):
+    s, url = server
+    play, dev = s.open_session(1, budget=5), s.open_session(2, budget=1, mode="develop")
+    assert status(s.dev_url, {"Authorization": f"Bearer {play.token}"}) == 401
+    assert status(url, {"Authorization": f"Bearer {dev.token}"}) == 401
+    play_tools, dev_tools = tools(url, play.token), tools(s.dev_url, dev.token)
+    assert {"request_development", "run_macro", "define_macro"} <= play_tools - dev_tools
+    assert {"ws_write", "validate", "mem_snapshot", "fixture_save", "dev_load"} <= dev_tools - play_tools
+    assert {"get_state", "press", "notes_read", "end_session", "knowledge_search"} <= play_tools & dev_tools
+    refused = call(s.dev_url, dev.token, "ws_list")
+    assert refused.is_error and "no development session is running" in text(refused)
+
+    s.bench = SimpleNamespace(game=FakeGame())  # the development game, not the live one
+    assert text(call(s.dev_url, dev.token, "press", {"button": "a"})) == "press done"  # not a game event
+    assert "budget" in text(call(s.dev_url, dev.token, "press", {"button": "a"}))
+    assert s.memory.events("action") == [] and play.actions == 0
+
+
+def test_request_development_cites_action_events_once_per_session(server):
+    s, url = server
+    session = s.open_session(1, budget=5)
+    call(url, session.token, "press", {"button": "a"})
+    action = s.memory.events("action")[0]["id"]
+    ask = {
+        "tool": "step",
+        "problem": "walking wastes actions",
+        "evidence": [action],
+        "expected_benefit": "fewer actions",
+        "proposal": "walk until blocked",
+    }
+    for bad in ({"evidence": [action + 99]}, {"evidence": []}, {"tool": "walk"}, {"tool": "Bad"}, {"problem": " "}):
+        assert call(url, session.token, "request_development", ask | bad).is_error
+    assert f"development request #{action + 1}" in text(call(url, session.token, "request_development", ask))
+    assert session.request == action + 1
+    assert s.memory.events("development_requested")[0]["data"]["evidence"] == [action]
+    again = call(url, session.token, "request_development", ask)
+    assert again.is_error and f"already made request #{action + 1}" in text(again)

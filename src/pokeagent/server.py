@@ -23,10 +23,12 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 
 from pokeagent import capabilities, objectives
+from pokeagent.develop import Bench, describe_report
 from pokeagent.emulator.client import EmulatorError
 from pokeagent.memory import Memory, describe_knowledge
 
 NOTES_LIMIT = 8 * 1024
+BUILTIN_TOOLS = {*capabilities.ACTIONS, "run_macro", "run_tool"}  # names a capability may not take
 
 
 @dataclass
@@ -39,6 +41,7 @@ class Session:
     summary: str | None = None
     next_focus: str | None = None
     claim: str | None = None
+    request: int | None = None  # a development request made in this session
     ended: bool = False
 
 
@@ -50,15 +53,19 @@ class GameServer:
     def __init__(self, game, memory: Memory, notes: Path, harness_issues: Path):
         self.game, self.memory, self.notes, self.harness_issues = game, memory, notes, harness_issues
         self.sessions: dict[str, Session] = {}
-        self.mcp = MCPServer("game")
+        self.mcp = MCPServer("game")  # play sessions
+        self.dev_mcp = MCPServer("game")  # develop sessions: their own tools, on their own port
+        self.bench = None  # the develop session's Bench while one runs
+        self.dev_url: str | None = None
+        self._servers: list[tuple[uvicorn.Server, threading.Thread]] = []
         self.after_action = None  # called after every action (the runner's recovery state and checkpoints)
         self.recover = None  # called with the error when the emulator fails; True once it runs again
         self.broken: str | None = None  # set once the emulator fails for good; game tools then refuse
         self._uvicorn: uvicorn.Server | None = None
         self._register_tools()
 
-    def open_session(self, number: int, budget: int) -> Session:
-        session = Session(number, secrets.token_urlsafe(32), budget)
+    def open_session(self, number: int, budget: int, mode: str = "play") -> Session:
+        session = Session(number, secrets.token_urlsafe(32), budget, mode)
         self.sessions[session.token] = session
         return session
 
@@ -70,7 +77,13 @@ class GameServer:
         return next((s for t, s in list(self.sessions.items()) if hmac.compare_digest(t.encode(), presented)), None)
 
     def start(self) -> str:
-        """Serve on a free 127.0.0.1 port in a background thread; return the MCP URL."""
+        """Serve play and develop sessions on two free 127.0.0.1 ports in background threads; return the play URL
+        (the develop URL is `dev_url`). A token only works on its own mode's port."""
+        logging.getLogger("mcp").setLevel(logging.WARNING)  # quiet: no per-session INFO lines on the terminal
+        self.dev_url = self._serve(self.dev_mcp, "develop")
+        return self._serve(self.mcp, "play")
+
+    def _serve(self, mcp: MCPServer, mode: str) -> str:
         sock = socket.socket()
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
@@ -79,22 +92,22 @@ class GameServer:
             allowed_hosts=[f"127.0.0.1:{port}"],
             allowed_origins=[f"http://127.0.0.1:{port}"],
         )
-        logging.getLogger("mcp").setLevel(logging.WARNING)  # quiet: no per-session INFO lines on the terminal
-        app = _RequireSession(self.mcp.streamable_http_app(transport_security=security), self.lookup)
-        self._uvicorn = uvicorn.Server(uvicorn.Config(app, log_level="warning", access_log=False))
-        thread = threading.Thread(target=self._uvicorn.run, kwargs={"sockets": [sock]}, daemon=True)
+        app = _RequireSession(mcp.streamable_http_app(transport_security=security), self.lookup, mode)
+        server = uvicorn.Server(uvicorn.Config(app, log_level="warning", access_log=False))
+        thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
         thread.start()
-        while not self._uvicorn.started:
+        while not server.started:
             if not thread.is_alive():
                 raise RuntimeError("the MCP server failed to start")
             time.sleep(0.01)
-        self._thread = thread
+        self._servers.append((server, thread))
         return f"http://127.0.0.1:{port}/mcp"
 
     def stop(self) -> None:
-        if self._uvicorn:
-            self._uvicorn.should_exit = True
-            self._thread.join(10)
+        for server, _ in self._servers:
+            server.should_exit = True
+        for _, thread in self._servers:
+            thread.join(10)
 
     def _session(self, ctx: Context) -> Session:
         session = self.lookup((ctx.headers or {}).get("authorization", ""))
@@ -104,6 +117,10 @@ class GameServer:
 
     def _register_tools(self) -> None:
         tool = self.mcp.tool(structured_output=False)
+        dev = self.dev_mcp.tool(structured_output=False)
+
+        def both(fn):
+            return tool(dev(fn))
 
         async def on_game(fn):
             if self.broken:
@@ -171,7 +188,7 @@ class GameServer:
             yes/no prompt appears, so you make every choice yourself. One action."""
             return await act(ctx, "advance_text")
 
-        @tool
+        @both
         def notes_read(ctx: Context) -> str:
             """Your notes, kept across sessions."""
             self._session(ctx)
@@ -188,14 +205,14 @@ class GameServer:
             tmp.replace(self.notes)
             return "saved"
 
-        @tool
+        @both
         def end_session(summary: str, next_focus: str, ctx: Context) -> str:
             """End this session: what you did and learned, and what the next session should focus on."""
             session = self._session(ctx)
             session.summary, session.next_focus, session.ended = summary[:4000], next_focus[:1000], True
             return "Recorded. This session is over: stop now, without further tool calls."
 
-        @tool
+        @both
         def report_harness_issue(description: str, evidence: str, ctx: Context) -> str:
             """Report a problem with pokeagent itself (a tool that misbehaves or reports wrong state), not with the
             game. The user reads these reports."""
@@ -213,7 +230,7 @@ class GameServer:
             except ValueError as e:
                 raise ToolError(str(e)) from e
 
-        @tool
+        @both
         def knowledge_search(query: str, ctx: Context, limit: int = 5) -> str:
             """Search what was learned in this run, earlier runs on this ROM and this game family, and in general.
             Matches any of the query's words; refuted and superseded entries are left out."""
@@ -221,7 +238,7 @@ class GameServer:
             found = remember(self.memory.search, query, max(1, min(limit, 20)))
             return "\n".join(describe_knowledge(entry) for entry in found) or "nothing found"
 
-        @tool
+        @both
         def knowledge_add(
             kind: str, topic: str, content: str, ctx: Context, scope: str = "rom", url: str = "", evidence: int = 0
         ) -> str:
@@ -233,7 +250,7 @@ class GameServer:
             entry = remember(self.memory.add_knowledge, kind, topic, content, scope, url, evidence, session.number)
             return f"recorded as #{entry}"
 
-        @tool
+        @both
         def knowledge_set_status(
             entry: int, status: str, ctx: Context, evidence: int = 0, superseded_by: int = 0
         ) -> str:
@@ -245,7 +262,7 @@ class GameServer:
 
         async def taken(kind: str) -> set[str]:
             """Names a new capability of `kind` may not take: the builtin ones and the other kind's."""
-            builtin = set(await on_game(self.game.observations)) | set(capabilities.ACTIONS) | {"run_macro"}
+            builtin = set(await on_game(self.game.observations)) | BUILTIN_TOOLS
             return builtin | {c["name"] for c in self.game.registry.active() if c["kind"] != kind}
 
         @tool
@@ -335,12 +352,43 @@ class GameServer:
             failure, and a version that keeps failing is rolled back."""
             return await run_capability(ctx, self.game.run_tool, name, args)
 
-        @tool
+        @both
         def list_capabilities(ctx: Context) -> str:
             """Your observations, macros and tools (this ROM's and this game family's), with their use so far."""
             self._session(ctx)
             found = self.game.registry.active()
             return "\n".join(capabilities.summary(self.game.registry, c) for c in found) or "none defined yet"
+
+        @tool
+        def request_development(
+            tool: str, problem: str, evidence: list[int], expected_benefit: str, proposal: str, ctx: Context
+        ) -> str:
+            """Ask for a development session to build a new code tool named `tool`, or to improve that tool. Describe
+            the problem, cite the action events that show it (the [event N] ids of action results), the benefit you
+            expect and what the tool would do. After this session, pokeagent applies its policy (a share of the run's
+            tokens, attempts per tool) and either runs a development session next or tells you why not in your next
+            brief. One request per session; end the session when you are ready for it."""
+            session = self._session(ctx)
+            if session.request is not None:
+                raise ToolError(f"this session already made request #{session.request}")
+            if not isinstance(tool, str) or not capabilities.NAME.fullmatch(tool) or tool in BUILTIN_TOOLS:
+                raise ToolError("tool must be a new or existing tool's name: 2-40 lowercase letters, digits and _")
+            if any(c["name"] == tool and c["kind"] != "tool" for c in self.game.registry.active()):
+                raise ToolError(f"{tool} is already the name of an observation or macro")
+            actions = {e["id"] for e in self.memory.events("action", limit=-1)}
+            if not evidence or len(evidence) > 10 or not set(evidence) <= actions:
+                raise ToolError("evidence must list 1-10 action event ids of this run")
+            fields = {"problem": problem, "expected_benefit": expected_benefit, "proposal": proposal}
+            if not all(isinstance(v, str) and v.strip() for v in fields.values()):
+                raise ToolError("problem, expected_benefit and proposal must be described")
+            data = {"tool": tool, "evidence": evidence} | {k: v[:2000] for k, v in fields.items()}
+            session.request = self.memory.event("development_requested", data, session.number)
+            return (
+                f"Recorded as development request #{session.request}. After this session pokeagent decides whether"
+                " the next one develops it; end the session when you are ready."
+            )
+
+        self._register_dev_tools(dev, remember)
 
         @tool
         async def propose_success_check(condition: dict, reason: str, ctx: Context) -> str:
@@ -371,17 +419,158 @@ class GameServer:
             session.claim = evidence[:2000]
             return "Recorded. The run pauses after this session for the user to confirm; end the session now."
 
+    def _register_dev_tools(self, dev, remember) -> None:
+        """Develop-mode tools: they act on the session's Bench (its own emulator and workspace), never the live game."""
+
+        async def on_bench(ctx: Context, fn, *args):
+            session = self._session(ctx)
+            if session.mode != "develop" or self.bench is None:
+                raise ToolError("no development session is running")
+            try:
+                return await anyio.to_thread.run_sync(partial(fn, self.bench, *args))
+            except ValueError as e:
+                raise ToolError(str(e)) from e
+            except EmulatorError as e:
+                raise ToolError(f"the development emulator stopped ({e}); dev_load starts it again") from e
+
+        async def act(ctx: Context, name: str, **args):
+            session = self._session(ctx)
+            if session.ended:
+                raise ToolError("this session has ended; stop now")
+            if session.actions >= session.budget:
+                raise ToolError(f"the action budget ({session.budget}) is used up")
+            session.actions += 1
+            text, png = await on_bench(ctx, lambda bench: bench.game.act(name, **args))
+            return [text, Image(data=png, format="png")] if png else text
+
+        @dev
+        async def get_state(ctx: Context) -> list:
+            """The development game's full state, whole map and a screenshot (free)."""
+            text, png = await on_bench(ctx, lambda bench: bench.game.full_state())
+            return [text, Image(data=png, format="png")]
+
+        @dev
+        async def press(button: str, ctx: Context, times: int = 1) -> list | str:
+            """Press a button in the development game, like play's press. One action of this session's budget."""
+            return await act(ctx, "press", button=button, times=times)
+
+        @dev
+        async def walk(direction: str, ctx: Context, steps: int = 1) -> list | str:
+            """Walk in the development game, like play's walk. One action."""
+            return await act(ctx, "walk", direction=direction, steps=steps)
+
+        @dev
+        async def walk_to(x: int, y: int, ctx: Context) -> list | str:
+            """Walk to (x, y) in the development game, like play's walk_to. One action."""
+            return await act(ctx, "walk_to", x=x, y=y)
+
+        @dev
+        async def advance_text(ctx: Context) -> list | str:
+            """Advance dialog in the development game, like play's advance_text. One action."""
+            return await act(ctx, "advance_text")
+
+        @dev
+        async def dev_load(ctx: Context, checkpoint: str = "") -> str:
+            """Restart the development game at the live state of this session's start, or at a checkpoint file of
+            the current timeline (see checkpoints)."""
+            return await on_bench(ctx, lambda bench: bench.load(checkpoint))
+
+        @dev
+        async def checkpoints(ctx: Context) -> str:
+            """The checkpoints of the current timeline that dev_load can start from."""
+            found = await on_bench(ctx, lambda bench: bench.checkpoints())
+            return "\n".join(f"{e['data']['file']}  {e['data']['reason']}" for e in found) or "none"
+
+        @dev
+        async def fixture_save(name: str, ctx: Context) -> str:
+            """Save the development game's state as a named fixture (at most 20) for your tests
+            (ctx.load_fixture) and validation, which also runs your examples on fixtures."""
+            return await on_bench(ctx, Bench.fixture_save, name)
+
+        @dev
+        async def fixture_load(name: str, ctx: Context) -> str:
+            """Put the development game into a saved fixture."""
+            return await on_bench(ctx, Bench.fixture_load, name)
+
+        @dev
+        async def mem_read(address: int, ctx: Context, length: int = 1) -> str:
+            """Read 1-64 bytes of the development game's RAM (never ROM), as hex."""
+            if not 1 <= length <= capabilities.MAX_READ:
+                raise ToolError(f"length must be 1..{capabilities.MAX_READ}")
+            data = await on_bench(ctx, lambda bench: bench.game.peek(address, length))
+            return f"{address:#06x}: {data.hex(' ')}"
+
+        @dev
+        async def mem_snapshot(name: str, ctx: Context) -> str:
+            """Keep a copy of work RAM (C000-DFFF) under `name` (at most 16 per session) to compare later."""
+            return await on_bench(ctx, Bench.snapshot, name)
+
+        @dev
+        async def mem_diff(before: str, ctx: Context, after: str = "now") -> str:
+            """The work RAM bytes that differ between two snapshots (or a snapshot and now)."""
+            return await on_bench(ctx, Bench.diff, before, after)
+
+        @dev
+        async def mem_search(value: int, ctx: Context, width: int = 1, among: list[int] | None = None) -> str:
+            """Work RAM addresses that hold `value` now (width 1 or 2 bytes, either byte order); pass an earlier
+            result's addresses as `among` to narrow it after the value changes."""
+            return await on_bench(ctx, Bench.search, value, width, among)
+
+        @dev
+        async def ws_list(ctx: Context) -> str:
+            """The files in this tool's workspace, and its fixtures."""
+            return await on_bench(ctx, Bench.ws_list)
+
+        @dev
+        async def ws_read(path: str, ctx: Context) -> str:
+            """Read a workspace file."""
+            return await on_bench(ctx, Bench.ws_read, path)
+
+        @dev
+        async def ws_write(path: str, content: str, ctx: Context) -> str:
+            """Write a workspace file (at most 200 files, 5 MB). A tool is manifest.json, tool.py and
+            test_tool.py."""
+            return await on_bench(ctx, Bench.ws_write, path, content)
+
+        @dev
+        async def ws_delete(path: str, ctx: Context) -> str:
+            """Delete a workspace file."""
+            return await on_bench(ctx, Bench.ws_delete, path)
+
+        @dev
+        async def library_read(name: str, ctx: Context) -> str:
+            """An active tool's manifest and code (read-only)."""
+            return await on_bench(ctx, Bench.library_read, name)
+
+        @dev
+        async def validate(ctx: Context, scope: str = "rom") -> str:
+            """Validate the workspace's tool: its manifest, ruff, your tests, then trusted runs of its examples on
+            the live state, fixtures and recent checkpoints. A pass stages it for the next play session. At most 10
+            per session."""
+            session = self._session(ctx)
+
+            def run(bench: Bench) -> dict:
+                observations = set(bench.game.observations())
+                observations |= {c["name"] for c in self.game.registry.active("observation")}
+                taken = observations | BUILTIN_TOOLS
+                taken |= {c["name"] for c in self.game.registry.active() if c["kind"] != "tool"}
+                return bench.validate(scope, session.number, observations, taken)
+
+            return describe_report(await on_bench(ctx, run))
+
 
 class _RequireSession:
-    """ASGI wrapper: HTTP requests without an open session's bearer token get 401 before MCP sees them."""
+    """ASGI wrapper: HTTP requests without the bearer token of an open session of this port's mode get 401 before
+    MCP sees them."""
 
-    def __init__(self, app, lookup):
-        self.app, self.lookup = app, lookup
+    def __init__(self, app, lookup, mode: str):
+        self.app, self.lookup, self.mode = app, lookup, mode
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
             authorization = dict(scope["headers"]).get(b"authorization", b"").decode("latin-1")
-            if self.lookup(authorization) is None:
+            session = self.lookup(authorization)
+            if session is None or session.mode != self.mode:
                 headers = [(b"content-type", b"text/plain")]
                 await send({"type": "http.response.start", "status": 401, "headers": headers})
                 await send({"type": "http.response.body", "body": b"unknown session\n"})

@@ -57,9 +57,14 @@ uv run pokeagent play --rom /path/to/your/red.gb --objective "Get the first badg
 uv run pokeagent resume 20261127-170000 --watch               # continue a run where it stopped
 uv run pokeagent restore 20261127-170000                      # list the checkpoints a stopped run can go back to
 uv run pokeagent restore 20261127-170000 1764263000000000000.state  # go back; learned knowledge stays
-uv run pokeagent capability list 20261127-170000              # the observations and macros the agent defined
+uv run pokeagent capability list 20261127-170000              # the observations, macros and tools it defined
 uv run pokeagent capability rollback 20261127-170000 heal     # take one back to its previous version
 ```
+
+When a problem keeps costing actions, the agent may ask for a development session, which writes and validates a
+code tool away from the live game. `--dev-share` (default 0.3 of the run's tokens), `--dev-attempts` (2 per tool),
+`--dev-timeout` (45 minutes) and `--dev-validations` (10 per session) on `play` and `resume` limit them; the first
+one always runs.
 
 Each run lives in `~/.local/share/pokeagent/runs/<id>/`: `play.log` shows every message and action, `notes.md` the
 agent's own notes. Ctrl-C stops a run after saving a checkpoint; closing the `--watch` window only stops watching.
