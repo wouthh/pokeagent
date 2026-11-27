@@ -431,6 +431,7 @@ name = "pokeagent"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "jsonschema" },
     { name = "libretro-py" },
     { name = "mcp" },
     { name = "pillow" },
@@ -444,6 +445,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "jsonschema", specifier = ">=4.23" },
     { name = "libretro-py", specifier = "==0.12.0" },
     { name = "mcp", specifier = ">=2.3,<3" },
     { name = "pillow", specifier = ">=11" },
