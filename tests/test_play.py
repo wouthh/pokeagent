@@ -1,5 +1,6 @@
 import json
 import time
+from pathlib import Path
 
 import pytest
 
@@ -117,3 +118,26 @@ def test_game_actions_on_the_rom(game):
     assert text.startswith("walk_to: map_changed") and "Reds House 1F" in text and png is None
     with pytest.raises(ValueError, match="button must be"):
         live.act("press", button="turbo", times=1)
+
+
+def test_resume_restores_the_notes_and_progress_saved_with_the_checkpoint(tmp_path):
+    runner, _, _ = make_runner(tmp_path, [])
+    notes, state = runner.run_dir / "notes.md", runner.run_dir / "state.json"
+    notes.write_text("old notes")
+    state.write_text('{"sessions": 1}')
+    runner.checkpoint("a")
+    notes.write_text("notes from a lost timeline")
+    state.write_text('{"sessions": 2}')
+    runner.restore_context(sorted((runner.run_dir / "checkpoints").glob("*.state"))[-1])
+    assert notes.read_text() == "old notes" and state.read_text() == '{"sessions": 1}'
+    for i in range(12):
+        runner.checkpoint(str(i))
+    folder = runner.run_dir / "checkpoints"
+    assert len(list(folder.glob("*.notes.md"))) == len(list(folder.glob("*.state"))) == 10
+
+
+def test_a_relative_run_dir_becomes_absolute(tmp_path, monkeypatch):
+    runner, _, _ = make_runner(tmp_path, [])
+    monkeypatch.chdir(tmp_path)
+    rel = Runner(Path("run"), runner.game, runner.server)
+    assert rel.run_dir.is_absolute()
