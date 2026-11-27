@@ -10,8 +10,9 @@ language. It keeps what it learns, and it builds and validates its own tools whe
 - **First use case:** Pokémon Red/Blue (English releases). The first long-term benchmark is finishing a whole
   playthrough without help.
 
-> **Status: early development.** The repository is being built in phases; see
-> [docs/architecture.md](docs/architecture.md) for the design and what is implemented so far.
+> **Status:** the play loop, memory and timelines, the agent's own observations, macros and validated code tools,
+> develop mode, the stuck ladder and run metrics are implemented (phases 1-7). Long live runs are the current work;
+> see [docs/architecture.md](docs/architecture.md) for the design and what has been observed live.
 
 ## How it works
 
@@ -22,8 +23,9 @@ agent reads the game state from RAM (map, position, party, bag, battle, on-scree
 On top of that loop:
 
 - **Objectives** are persistent and checked against game state where possible.
-- **Memory** (SQLite) separates the objective, goals, game progress, world and technical knowledge, strategies and
-  lessons, and keeps confirmed facts apart from hypotheses.
+- **Memory** (SQLite) keeps the objective and its checks, game progress, world and technical knowledge, strategies
+  and lessons, and keeps confirmed facts apart from hypotheses. Progress belongs to a timeline, so going back to a
+  checkpoint undoes it while what was learned stays.
 - **Capabilities** grow during the run. The agent can define RAM observations and macros while playing, and write
   code extensions in a separate development mode. Every capability is validated against trusted contracts in an
   isolated emulator before it is activated, and is versioned and reversible.
@@ -47,6 +49,26 @@ uv run pokeagent --help
 
 Emulator cores always run in a bubblewrap sandbox; if the sandbox cannot be set up (for example when unprivileged
 user namespaces are disabled), pokeagent refuses to start rather than running unsandboxed.
+
+## Trying it
+
+1. Check that the Claude CLI is logged in: `claude auth status`.
+2. Start a short run you can watch:
+
+   ```sh
+   uv run pokeagent play --rom /path/to/your/red.gb --watch --max-sessions 1
+   ```
+
+   A session is one `claude -p` conversation of at most 100 game actions. In the live checks so far a session took
+   3 to 7 minutes and cost $1 to $2 of Claude usage (reported per session in `play.log` and by `pokeagent stats`).
+   `--model` and `--effort` choose the Claude model and reasoning effort.
+3. Watch it: the window shows the game, the last action and a panel with the run's status. `play.log` in the run
+   folder has every message, tool call and session summary (`tail -f` it), and `notes.md` the agent's own notes.
+4. Continue with `uv run pokeagent resume <run id> --watch`. Without `--max-sessions` it plays until the objective
+   is met, the run pauses for you, or you press Ctrl-C (which saves a checkpoint first). When usage limits are hit,
+   it waits for the reset.
+5. Look at what it did: `pokeagent status <run id>`, `pokeagent stats <run id>` and `pokeagent capability list
+   <run id>`. Problems the agent finds in pokeagent itself go to `~/.local/share/pokeagent/harness-issues.md`.
 
 ## Playing
 
