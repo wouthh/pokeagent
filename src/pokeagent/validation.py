@@ -131,6 +131,8 @@ def _tests(game, candidate: dict, folder: Path, fixtures: dict, live: bytes, ste
 
 
 def _contract(game, candidate: dict, states: list[tuple[str, bytes]], step) -> bool:
+    game.registry.stores.clear()  # the agent's tests must not decide whether the trusted runs pass
+    game.tkv.unlink(missing_ok=True)
     ran = 0
     for label, state in states:
         if ran == MAX_STATES:

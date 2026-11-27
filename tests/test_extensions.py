@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from pokeagent import extensions
-from pokeagent.capabilities import CapabilityError, Registry
+from pokeagent.capabilities import CapabilityError, Registry, check_macro
 from pokeagent.emulator.client import RequestRefused
 from pokeagent.extensions import Budget, Refused, Runner, install
 from pokeagent.memory import Memory
@@ -295,3 +295,53 @@ def test_a_newer_validation_replaces_a_staged_version(world):
     assert [c["version"] for c in world.registry.staged()] == [2]
     world.registry.activate_staged()
     assert world.registry.get("step", "tool")["spec"]["description"] == "walk right, v2"
+
+
+def test_a_macro_a_tool_calls_spends_the_tools_budget(world):
+    spec = check_macro(
+        {
+            "name": "mash",
+            "description": "press a many times",
+            "steps": [{"do": "press", "args": {"button": "a", "times": 10}, "repeat": 100}],
+        },
+        set(),
+        set(),
+        {"press", "walk"},
+    )
+    world.registry.define("macro", spec, "rom", 1)
+    tool = world.add("masher", "ctx.call('mash')")
+    with pytest.raises(CapabilityError, match="inputs is used up"):
+        Runner(world).call(tool, {}, Budget.start(world, inputs=500))
+
+
+def test_a_tool_that_closes_its_pipe_and_sleeps_is_stopped(world):
+    tool = world.add("sleeper", "import os, time\nos.close(1)\ntime.sleep(60)")
+    budget = Budget.start(world)
+    budget.deadline -= budget.seconds - 3
+    with pytest.raises(CapabilityError, match="ran out of time"):
+        Runner(world).call(tool, {}, budget)
+
+
+def test_contract_runs_do_not_see_what_the_agents_tests_wrote(world):
+    files = {
+        "tool.py": "def run(ctx):\n    if not ctx.tkv.get('flag'):\n        raise ValueError('no flag')\n",
+        "test_tool.py": "def test_sets(ctx):\n    ctx.tkv.set('flag', True)\n",
+    }
+    report = check(world, MANIFEST | {"effects": [], "examples": [{}]}, files)
+    assert not report["passed"] and "no flag" in report["steps"][-1]["detail"], report
+
+
+def test_an_old_capability_table_is_widened_once(tmp_path):
+    memory = Memory(tmp_path / "memory.db", "run-1")
+    memory.open_run({"objective": "x", "rom_sha1": "red", "family": "pokemon-gen1"})
+    memory.db.executescript(
+        "CREATE TABLE capabilities (id INTEGER PRIMARY KEY, name TEXT NOT NULL, version INTEGER NOT NULL,"
+        " kind TEXT NOT NULL CHECK (kind IN ('observation', 'macro')), scope TEXT NOT NULL, spec TEXT NOT NULL,"
+        " status TEXT NOT NULL CHECK (status IN ('active', 'previous', 'retired')), run TEXT NOT NULL,"
+        " session INTEGER, created REAL NOT NULL, UNIQUE (name, scope, version));"
+        " INSERT INTO capabilities VALUES (1, 'old', 1, 'macro', 'rom:red', '{}', 'active', 'r', NULL, 0);"
+    )
+    registry = Registry(memory)
+    assert [c["name"] for c in registry.active()] == ["old"]
+    registry.define("tool", {"name": "t"}, "rom", 1, staged=True)
+    assert [c["name"] for c in registry.staged()] == ["t"]
