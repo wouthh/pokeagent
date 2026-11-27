@@ -708,8 +708,11 @@ class Runner:
     def _wait_for_reset(self, result: SessionResult) -> None:
         wait = max(60.0, result.resets_at - time.time()) if result.resets_at else 900.0
         self.log("limit", f"waiting {wait / 60:.0f} min for the usage limit to reset")
-        self.memory.event("limit_wait", {"seconds": wait})  # stats leave it out of elapsed time
-        self.sleep(wait)
+        start = time.monotonic()
+        try:
+            self.sleep(wait)
+        finally:  # the time actually waited, also when Ctrl-C cuts it short; stats leave it out of elapsed time
+            self.memory.event("limit_wait", {"seconds": time.monotonic() - start})
 
     def _develop(self, request_id: int, progress: dict) -> int:
         """Apply the policy to a development request; run the develop session when allowed. Returns the number of

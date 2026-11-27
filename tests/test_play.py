@@ -366,8 +366,21 @@ def test_usage_limit_waits_for_the_reset_and_keeps_the_summary(tmp_path):
     runner, briefs, sleeps = make_runner(tmp_path, results)
     assert runner.loop("url", max_sessions=3) == "max_sessions"
     assert 3500 < sleeps[0] <= 3600
-    assert [e["data"]["seconds"] for e in runner.memory.events("limit_wait")] == sleeps
+    assert len(runner.memory.events("limit_wait")) == 1
     assert "walked north" in briefs[2]
+
+
+def test_an_interrupted_limit_wait_records_the_time_actually_waited(tmp_path):
+    def interrupted(seconds):
+        time.sleep(0.05)
+        raise KeyboardInterrupt
+
+    runner, _, _ = make_runner(tmp_path, [(SessionResult("limit", resets_at=int(time.time()) + 3600), None)])
+    runner.sleep = interrupted
+    with pytest.raises(KeyboardInterrupt):
+        runner.loop("url", max_sessions=1)
+    (wait,) = runner.memory.events("limit_wait")
+    assert 0.04 < wait["data"]["seconds"] < 5
 
 
 def test_repeated_errors_back_off_then_stop(tmp_path):
