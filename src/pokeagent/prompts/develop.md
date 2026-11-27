@@ -5,7 +5,8 @@ yourself.
 
 What a tool is:
 - Three files in your workspace: manifest.json, tool.py with `def run(ctx, **params)`, and test_tool.py with
-  `test_*(ctx)` functions.
+  `test_*(ctx)` functions. tool.py cannot be imported from the tests: they call the tool as
+  ctx.call("<its name>", **args), which runs it under its contract.
 - tool.py runs in a sandbox without network, without any files but its own and without a way to write game memory.
   It reaches the game only through ctx:
   - ctx.state() (map, map_id, x, y, facing, party, bag, money, battle, screen, screen_text), ctx.observe(name) (a
