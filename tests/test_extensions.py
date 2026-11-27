@@ -367,3 +367,27 @@ def test_a_failed_nested_call_cannot_hide_a_broken_invariant(world):
     )
     with pytest.raises(CapabilityError, match="invariant failed"):
         Runner(world).call(parent, {})
+
+
+def test_an_unevaluable_invariant_cannot_be_caught_away(world):
+    world.add("child", "ctx.press('select')\nreturn 'x'", effects=["money"], returns={"type": "integer"})
+    parent = world.add(
+        "parent",
+        "try:\n    ctx.call('child')\nexcept Exception:\n    return 'caught'",
+        effects=["money"],
+        invariants={"obs": "money", "op": ">=", "value": 100},
+    )
+    world._observations = lambda: {"x": world.x, "money": "text"}  # a text observation against a number
+    with pytest.raises(CapabilityError, match="cannot be evaluated"):
+        Runner(world).call(parent, {})
+
+
+def test_contract_runs_start_from_a_copy_of_the_live_timeline_store(world):
+    world.tkv.write_text('{"flagged": {"flag": true}}')
+    files = {
+        "tool.py": "def run(ctx):\n    if not ctx.tkv.get('flag'):\n        raise ValueError('no flag')\n",
+        "test_tool.py": "def test_sets(ctx):\n    ctx.tkv.set('flag', True)\n",
+    }
+    report = check(world, MANIFEST | {"name": "flagged", "effects": [], "examples": [{}]}, files)
+    assert report["passed"], report
+    assert json.loads(world.tkv.read_text()) == {"flagged": {"flag": True}}
