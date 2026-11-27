@@ -54,6 +54,7 @@ CHARMAP |= {0xF6 + i: str(i) for i in range(10)}
 CURSOR, WAIT_ARROW, BOX_TOP_LEFT, BOX_BOTTOM_RIGHT = 0xED, 0xEE, 0x79, 0x7E
 STATUS = {0x08: "poisoned", 0x10: "burned", 0x20: "frozen", 0x40: "paralyzed"}
 
+REACT_FRAMES = 32
 DIRECTIONS = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
 FACING_CODES = {0x0: "down", 0x4: "up", 0x8: "left", 0xC: "right"}
 
@@ -420,8 +421,15 @@ class Gen1:
     # ---- macro actions (controller input only) ----
 
     def press(self, emu: Emulator, button: str, hold: int = 2, wait: int = 12) -> None:
+        """Hold `button`, release, wait `wait` frames, then keep waiting (up to REACT_FRAMES in all) until the screen
+        changes: a menu keeps showing its cursor for about 16 frames after it accepted a press."""
+        before = self.screen_tiles(emu)
         emu.run([button], hold)
         emu.run([], wait)
+        for _ in range(wait, REACT_FRAMES, 4):
+            if self.screen_tiles(emu) != before:
+                return
+            emu.run([], 4)
 
     def _position(self, emu: Emulator) -> tuple[int, int, int]:
         m = emu.read(CUR_MAP, 5)

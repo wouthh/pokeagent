@@ -153,3 +153,15 @@ def test_state_tolerates_any_ram(rom_path):
     for seed in range(200):
         state = gen1.state(Noise(seed))
         gen1.state_text(state), gen1.observations(state), gen1.fingerprint(state)
+
+
+def test_press_waits_for_a_menu_to_react(game):
+    # Live run 1a: A on a prompt is accepted, but the prompt box stays on screen for 16 frames, so a result taken
+    # sooner shows a stale menu and the agent presses again.
+    gen1, emu, bedroom = game
+    emu.load_state(bedroom)
+    gen1.press(emu, "start", wait=30)
+    assert gen1.choose(emu, "SAVE")
+    assert gen1.advance_text(emu)["outcome"] == "menu"
+    gen1.press(emu, "a")  # YES
+    assert not gen1.state(emu)["screen"]["yes_no"]

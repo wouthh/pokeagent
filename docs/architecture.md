@@ -91,11 +91,11 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
 - **Run directory** (`<data dir>/runs/<id>/`, mode 0700): `run.json` (objective, trusted check, ROM path and
   sha1, core and options; written once), `state.json` (session count, last summary and focus), `notes.md`,
   `play.log` (one line per message, tool call and lifecycle event), `checkpoints/` (the last 10 states, written
-  atomically every 25 actions, at every session end and on stop), `sessions/NNNN.jsonl` (raw streams) and `web.jsonl` (the web
-  hook's log). Harness issues go to `<data dir>/harness-issues.md`.
+  atomically every 25 actions, at every session end and on stop), `sessions/NNNN.jsonl` (raw streams) and
+  `web.jsonl` (the web hook's log). Harness issues go to `<data dir>/harness-issues.md`.
 - **Objective:** only the adapter's default objective gets its trusted check (Red/Blue: the Hall of Fame map),
-  evaluated before every session once a game is in progress (power-on RAM is noise that could match by chance); a custom objective has no check yet and runs until stopped. Proposed and user
-  checks arrive with phase 5.
+  evaluated before every session once a game is in progress (power-on RAM is noise that could match by chance).
+  A custom objective has no check yet and runs until stopped; proposed and user checks arrive with phase 5.
 - **`server.py`:** the `game` MCP server on a free 127.0.0.1 port, in a background thread. A per-session bearer
   token is checked before MCP sees a request, and the Host header must name this server. Tools: `get_state`
   (full text, whole-map ASCII, 3x screenshot; free), the actions `press`, `walk`, `walk_to` and `advance_text`
@@ -137,7 +137,8 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
   agents-md, no skills, slash commands or memory paths, `dontAsk`). Any deviation kills the session and raises
   `InitRejected`, which stops the run. A missing or malformed `init`, or any assistant/user/result event before a
   validated one, is rejected the same way; any other exception in the session loop kills and reaps the process group.
-  The web hook blocks (exit 2) when its log cannot be written. `init` precedes the first model request, so a rejection costs no tokens.
+  The web hook blocks (exit 2) when its log cannot be written. `init` precedes the first model request, so a rejection
+  costs no tokens.
 - How a session ended, from structured fields first:
   - **completed:** a normal end;
   - **max_turns:** a normal end;
@@ -161,7 +162,8 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
     authority is blocked rather than interpreted;
   - local or non-public hosts (private and loopback IPv4, `localhost`, dotless names, numeric last labels such as
     `127.1`, `.local`/`.lan`/`.internal`/…), compared without a trailing DNS dot;
-  - token-like runs (24+ hex characters, or 32+ base64 characters mixing letters and digits), also in the hostname and in percent-decoded text;
+  - token-like runs (24+ hex characters, or 32+ base64 characters mixing letters and digits), also in the hostname and
+    in percent-decoded text;
   - path plus query, or search text, over 200 characters.
 
   Malformed hook input is blocked too.
@@ -231,6 +233,19 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
 - Map events can start a few frames after a step ends (Oak's event in Pallet Town), so a walk can report `arrived`
   with a dialog appearing right after it; tool results show the screen after a short settle.
 - Red and Blue swap the preset names (RED/BLUE versus BLUE/RED).
+- A menu or prompt that accepted a press keeps its box and cursor on screen for about 16 frames. `press` therefore
+  waits until the screen changes (up to 32 frames); with a fixed 12-frame wait, live run 1a saw stale menus and
+  pressed again, believing its input had been dropped. Hold length does not matter: 1 to 6 frames are all accepted.
+
+**Live run 1a (2026-11-27, Red, default objective, 3 sessions of 100 actions)**
+
+- About 3 minutes, 110 to 130 turns and about $1 per session (CLI-reported cost).
+- From power-on to the Pewter City Pokémon Center: starter (Bulbasaur), the rival battle, Oak's Parcel and the
+  Pokédex, Poké Balls, two catches, Viridian Forest and its Bug Catcher, Bulbasaur at level 7. No badge yet.
+  Verified from the last checkpoint, not from the agent's summary.
+- Harness problems found and fixed: the worker's audio buffer filled its memory limit (first attempt), power-on RAM
+  crashed the state reader (second attempt), and stale menus after a press (agent notes). The only tool errors in the
+  run were calls after the action budget was used up.
 
 **Sandbox (bwrap)**
 
