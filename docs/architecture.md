@@ -302,6 +302,13 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
   - *Validation:* the workspace's manifest must name the requested tool. The states are the live state, the tool's
     fixtures and the last two checkpoints, each run on a fresh emulator. A pass stages the version; it becomes
     active at the next play session.
+  - *Live check (2026-11-27):* three 100-action play sessions continued the phase 6a live copy from Pewter City
+    ($4.46). The agent beat Brock, crossed Mt. Moon and beat Misty, defined 7 more macros (16 versions in all) and
+    made 38 macro calls with 3 failures, but did not request development. A develop session was then started on a
+    scratch copy with a harness request that names no gameplay capability (so it is no evidence for A13). It took 10
+    turns ($0.14): it wrote the three files, saved a fixture and validated twice. The first validation failed because
+    its tests imported `tool.py`; it switched to `ctx.call` and the second passed on the live state, the fixture and
+    a checkpoint, and staged the tool. The develop prompt now says that tests call the tool through `ctx.call`.
   - *Records:* `session_start`/`session_end` with `"mode": "develop"` (the end carries the usage the policy counts)
     and a `development_cycle` event (request, tool, attempt, summary, validations, staged version) that the next play
     brief reports. A develop session counts toward `--max-sessions`.
