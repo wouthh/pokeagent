@@ -507,3 +507,15 @@ def test_the_game_restarts_at_a_saved_state(game, rom_path):
     live.restart(bedroom)
     assert live.state_text() == before and live.emu is started[-1]
     live.emu.close()
+
+
+def test_a_restart_also_restores_the_timeline_store(tmp_path):
+    runner, _, _ = make_runner(tmp_path, [])
+    tkv = runner.run_dir / "tkv.json"
+    runner.server.after_action()
+    runner.run_dir.joinpath("tkv.json").write_text('{"t": {"done": true}}')  # a tool wrote it, then the action failed
+    assert runner.recover("worker exited") and not tkv.exists()
+    tkv.write_text('{"t": {"step": 1}}')
+    runner.server.after_action()
+    tkv.write_text('{"t": {"step": 2}}')
+    assert runner.recover("worker exited") and json.loads(tkv.read_text()) == {"t": {"step": 1}}
