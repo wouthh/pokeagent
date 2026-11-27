@@ -50,8 +50,9 @@ class GameServer:
         self.game, self.memory, self.notes, self.harness_issues = game, memory, notes, harness_issues
         self.sessions: dict[str, Session] = {}
         self.mcp = MCPServer("game")
-        self.after_action = None  # called after every action (the runner's periodic checkpoint)
-        self.broken: str | None = None  # set once the emulator fails; game tools then refuse
+        self.after_action = None  # called after every action (the runner's recovery state and checkpoints)
+        self.recover = None  # called with the error when the emulator fails; True once it runs again
+        self.broken: str | None = None  # set once the emulator fails for good; game tools then refuse
         self._uvicorn: uvicorn.Server | None = None
         self._register_tools()
 
@@ -111,6 +112,15 @@ class GameServer:
             except ValueError as e:
                 raise ToolError(str(e)) from e
             except EmulatorError as e:
+                try:
+                    restarted = self.recover is not None and await anyio.to_thread.run_sync(self.recover, str(e))
+                except EmulatorError:
+                    restarted = False
+                if restarted:
+                    raise ToolError(
+                        f"the emulator stopped during this call ({e}) and was restarted at the state after your last"
+                        " completed action, so this call had no effect; check get_state"
+                    ) from e
                 self.broken = str(e)
                 raise ToolError(f"the emulator has stopped ({e}); end the session") from e
 
@@ -122,10 +132,10 @@ class GameServer:
                 raise ToolError(f"the action budget ({session.budget}) is used up: update your notes, then end_session")
             session.actions += 1
             text, png = await on_game(partial(self.game.act, name, **args))
+            if self.after_action:  # an action whose recovery state was not saved is undone by a restart: no event
+                await on_game(self.after_action)
             outcome = {"name": name, "args": args, "outcome": text.split("\n", 1)[0]}
             text = f"[event {self.memory.event('action', outcome, session.number)}] {text}"
-            if self.after_action:
-                await on_game(self.after_action)
             return [text, Image(data=png, format="png")] if png else text
 
         @tool

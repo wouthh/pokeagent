@@ -2,11 +2,13 @@
 passes, a limit is reached or a blocker stops it.
 
 A run directory (local only) holds `run.json` (objective, checks, ROM identity; never rewritten), `state.json` (session
-count, last summary and focus), `notes.md`, `play.log`, `checkpoints/*.state`, the raw session streams and the web log.
-The data directory's `memory.db` holds the runs' status, success checks, events and knowledge (see memory.py).
+count, last summary and focus), `notes.md`, `play.log`, `recovery.state` (the game after the last action),
+`checkpoints/*.state` (each with its notes and progress), the raw session streams and the web log. The data directory's
+`memory.db` holds the runs' status, success checks, timelines, events and knowledge (see memory.py).
 """
 
 import contextlib
+import fcntl
 import hashlib
 import io
 import json
@@ -14,6 +16,7 @@ import os
 import shutil
 import threading
 import time
+from functools import partial
 from pathlib import Path
 
 from PIL import Image
@@ -42,7 +45,9 @@ KEEP_CHECKPOINTS = 10
 CONTEXT_FILES = ("notes.md", "state.json")
 CHECKPOINT_EVERY = 25  # actions
 MAX_FAILURES = 5
+MAX_RESTARTS = 3  # emulator restarts per play
 KNOWLEDGE_HITS = 5
+IDENTITY = ("rom_sha1", "core", "core_options")  # what a checkpoint must share with its run to be restored
 LEGEND = "@ you, S person or object, W warp/door, . walkable, , grass, v < > ^ ledges, # blocked"
 
 
@@ -57,12 +62,30 @@ def open_memory(run_dir: Path, data_dir: Path) -> Memory:
     return memory
 
 
+@contextlib.contextmanager
+def run_lock(run_dir: Path):
+    """Only one pokeagent process plays or restores a run at a time."""
+    with (run_dir / ".lock").open("w") as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError(f"run {run_dir.name} is in use by another pokeagent process") from None
+        yield
+
+
+def write_atomic(path: Path, data: bytes) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_bytes(data)
+    tmp.replace(path)
+
+
 class Game:
     """The live emulator and adapter. One lock serialises every call. The adapter drives this object as its
-    emulator, so `run` can pace emulation (`speed` x real time) and feed the viewer."""
+    emulator, so `run` can pace emulation (`speed` x real time) and feed the viewer. `start` makes a new emulator
+    for `restart`."""
 
-    def __init__(self, emu: Emulator, adapter: Gen1, speed: float | None = None, viewer=None):
-        self.emu, self.adapter, self.speed, self.viewer = emu, adapter, speed, viewer
+    def __init__(self, emu: Emulator, adapter: Gen1, speed: float | None = None, viewer=None, start=None):
+        self.emu, self.adapter, self.speed, self.viewer, self.start = emu, adapter, speed, viewer, start
         self.lock = threading.Lock()
         self.fps = emu.info["fps"]
         self._shown = 0.0
@@ -91,6 +114,15 @@ class Game:
     def load_state(self, state: bytes) -> None:
         with self.lock:
             self.emu.load_state(state)
+
+    def restart(self, state: bytes | None) -> None:
+        """Replace the emulator (after its worker failed) with a new one at `state` (None: power-on)."""
+        with self.lock:
+            with contextlib.suppress(EmulatorError, OSError):
+                self.emu.close()
+            self.emu = self.start()
+            if state:
+                self.emu.load_state(state)
 
     def state_text(self) -> str:
         with self.lock:
@@ -221,8 +253,8 @@ class Runner:
         self.budget, self.session_timeout, self.model, self.effort = budget, session_timeout, model, effort
         self.meta = json.loads((run_dir / "run.json").read_text())
         self.memory: Memory = server.memory
-        self._actions = 0
-        server.after_action = self._after_action
+        self._actions = self.restarts = 0
+        server.after_action, server.recover = self._after_action, self.recover
         (run_dir / "sessions").mkdir(exist_ok=True)
         (run_dir / "checkpoints").mkdir(exist_ok=True)
 
@@ -245,9 +277,7 @@ class Runner:
     def checkpoint(self, reason: str) -> None:
         folder = self.run_dir / "checkpoints"
         path = folder / f"{time.time_ns()}.state"
-        tmp = path.with_suffix(".tmp")
-        tmp.write_bytes(self.game.save_state())
-        tmp.replace(path)
+        write_atomic(path, self.game.save_state())
         for name in CONTEXT_FILES:  # timeline-bound context travels with its checkpoint
             if (self.run_dir / name).exists():
                 shutil.copyfile(self.run_dir / name, path.with_suffix(f".{name}"))
@@ -255,32 +285,33 @@ class Runner:
             old.unlink()
             for name in CONTEXT_FILES:
                 old.with_suffix(f".{name}").unlink(missing_ok=True)
-        self.memory.event("checkpoint", {"file": path.name, "reason": reason})
+        identity = {key: self.meta[key] for key in IDENTITY}
+        self.memory.event("checkpoint", {"file": path.name, "reason": reason} | identity)
         self.log("checkpoint", f"{path.name} ({reason})")
 
-    def restore_context(self, checkpoint: Path | None) -> None:
-        """Replace the notes and progress with the ones saved at `checkpoint`, or drop them for a power-on restart
-        (the discarded timeline's are dropped)."""
-        self.memory.discard_progress_after(checkpoint.name if checkpoint else None)
-        # actions before this belong to a discarded attempt
-        self.memory.event("restore", {"file": checkpoint.name if checkpoint else None})
-        for name in CONTEXT_FILES:
-            saved = checkpoint.with_suffix(f".{name}") if checkpoint else None
-            if saved and saved.exists():
-                shutil.copyfile(saved, self.run_dir / name)
-            else:
-                (self.run_dir / name).unlink(missing_ok=True)
-
     def _after_action(self) -> None:
+        write_atomic(self.run_dir / "recovery.state", self.game.save_state())
         self._actions += 1
         if self._actions % CHECKPOINT_EVERY == 0:
             self.checkpoint(f"{self._actions} actions")
+
+    def recover(self, error: str) -> bool:
+        """Restart a failed emulator at the state after the last completed action; False once restarts run out."""
+        if self.restarts >= MAX_RESTARTS:
+            return False
+        self.restarts += 1
+        self.game.restart(latest_state(self.run_dir))
+        self.memory.event("restart", {"error": error})
+        self.log("restart", f"the emulator was restarted after: {error}")
+        return True
 
     def brief(self, number: int, progress: dict) -> str:
         notes = self.run_dir / "notes.md"
         observations = self.game.observations()
         lines = [f"Objective: {self.meta['objective']}", *self._checks(observations), ""]
         last_start = (self.memory.events("session_start", limit=1) or [{"id": 0}])[0]["id"]
+        for restored in self.memory.events("restore", after=last_start):
+            lines += [restore_notice(restored["data"]), ""]
         for rejected in self.memory.events("claim_rejected", after=last_start):
             data = rejected["data"]
             lines += [
@@ -360,6 +391,7 @@ class Runner:
                 model=self.model,
                 effort=self.effort,
             )
+            progress_file.write_text(json.dumps(progress, indent=1) + "\n")  # session numbers are never reused
             self.log("session", f"{number} start")
             self.memory.event("session_start", {}, number)
             try:
@@ -369,11 +401,7 @@ class Runner:
             if session.summary:
                 progress["summary"], progress["next_focus"] = session.summary, session.next_focus
             elif session.actions:
-                restored = self.memory.events("restore", limit=1)
-                after = restored[0]["id"] if restored else 0
-                last = "; ".join(
-                    e["data"]["outcome"] for e in self.memory.events("action", session=number, after=after, limit=5)
-                )
+                last = "; ".join(e["data"]["outcome"] for e in self.memory.events("action", session=number, limit=5))
                 progress["summary"] = (
                     f"(no summary: session {number} ended with {result.end} after {session.actions} actions;"
                     f" its last actions: {last})"
@@ -407,6 +435,81 @@ class Runner:
                 failures = 0
 
 
+def latest_state(run_dir: Path) -> bytes | None:
+    """The game as it was after the last action (or restore), else the latest checkpoint, else None (power-on)."""
+    if (recovery := run_dir / "recovery.state").exists():
+        return recovery.read_bytes()
+    if saved := sorted((run_dir / "checkpoints").glob("*.state")):
+        return saved[-1].read_bytes()
+    return None
+
+
+def restorable(run_dir: Path, memory: Memory) -> list[dict]:
+    """The checkpoint events of the current timeline's history whose files still exist, oldest first."""
+    history = memory.history()
+    return [
+        event
+        for event in memory.events("checkpoint", limit=-1)
+        if event["created"] <= history.get(event["timeline"], -1)
+        and (run_dir / "checkpoints" / event["data"]["file"]).exists()
+    ]
+
+
+def restore(run_dir: Path, memory: Memory, name: str) -> dict:
+    """Take the run back to checkpoint `name` on a new timeline (see Memory.branch). The game, notes and planned focus
+    become the checkpoint's; the session count stays. The next brief says what changed. Call under `run_lock`."""
+    meta = json.loads((run_dir / "run.json").read_text())
+    target = next((e for e in reversed(restorable(run_dir, memory)) if e["data"]["file"] == name), None)
+    if target is None:
+        raise ValueError(f"{name} is not a saved checkpoint of this run's current timeline or its history")
+    if any(target["data"].get(key) != meta[key] for key in IDENTITY):
+        raise ValueError(f"{name} was saved with another ROM, core or core options than this run's")
+    path = run_dir / "checkpoints" / name
+    notes, progress_file = run_dir / "notes.md", run_dir / "state.json"
+    old_notes = notes.read_text() if notes.exists() else ""
+    progress = json.loads(progress_file.read_text()) if progress_file.exists() else {"sessions": 0}
+    history = memory.history()
+    undone = sum(
+        1
+        for e in memory.events("action", after=target["id"], limit=-1)
+        if e["created"] <= history.get(e["timeline"], -1)
+    )
+    stale = memory.branch(target)
+    write_atomic(run_dir / "recovery.state", path.read_bytes())
+    saved_notes = path.with_suffix(".notes.md")
+    new_notes = saved_notes.read_text() if saved_notes.exists() else ""
+    write_atomic(notes, new_notes.encode())
+    saved_progress = path.with_suffix(".state.json")
+    restored = json.loads(saved_progress.read_text()) if saved_progress.exists() else {}
+    restored["sessions"] = progress["sessions"]
+    progress_file.write_text(json.dumps(restored, indent=1) + "\n")
+    kept = set(new_notes.splitlines())
+    data = {
+        "file": name,
+        "reason": target["data"]["reason"],
+        "saved": time.strftime("%Y-%m-%d %H:%M", time.localtime(target["created"])),
+        "undone_actions": undone,
+        "stale": stale,
+        "dropped_notes": [line for line in old_notes.splitlines() if line.strip() and line not in kept][:40],
+    }
+    memory.event("restore", data)
+    return data
+
+
+def restore_notice(data: dict) -> str:
+    lines = [
+        f"The game was restored to the checkpoint saved {data['saved']} ({data['reason']}): {data['undone_actions']}"
+        " later actions were undone, so the game is back where it was then. Your notes and planned focus are the"
+        " ones saved with it.",
+    ]
+    if data["stale"]:
+        lines.append(f"Progress knowledge recorded after it is now stale: {', '.join(f'#{i}' for i in data['stale'])}.")
+    if data["dropped_notes"]:
+        lines.append("Note lines from the undone part (what you learned there may still hold):")
+        lines += [f"  {line}" for line in data["dropped_notes"]]
+    return "\n".join(lines)
+
+
 def play(
     run_dir: Path,
     data_dir: Path,
@@ -417,7 +520,7 @@ def play(
     watch: bool = False,
     speed: float | None = None,
 ) -> str:
-    """Play a run from its latest checkpoint (or power-on) until something stops it; return why."""
+    """Play a run from where it stopped (or power-on) until something stops it; return why."""
     run_dir = run_dir.resolve()
     meta = json.loads((run_dir / "run.json").read_text())
     rom = Path(meta["rom"])
@@ -425,30 +528,27 @@ def play(
     if hashlib.sha1(data).hexdigest() != meta["rom_sha1"]:
         raise ValueError(f"{rom} is no longer the ROM this run started with")
     adapter = Gen1(data)
-    with contextlib.closing(open_memory(run_dir, data_dir)) as memory:
+    with run_lock(run_dir), contextlib.closing(open_memory(run_dir, data_dir)) as memory:
         status, why = memory.status()
         if status != "running":
-            settle = (
-                f"; settle it with `pokeagent objective confirm|reject {run_dir.name}`" if status == "claimed" else ""
-            )
-            raise ValueError(f"run {run_dir.name} is {status} ({why}){settle}")
+            settle = f"; settle it with `pokeagent objective confirm|reject {run_dir.name}`"
+            raise ValueError(f"run {run_dir.name} is {status} ({why})" + (settle if status == "claimed" else ""))
         version = preflight()
         viewer = None
         if watch:
             from pokeagent.viewer import Viewer
 
             viewer = Viewer()
-        with Emulator(core_path(meta["core"]), rom, options=meta["core_options"]) as emu:
-            game = Game(emu, adapter, speed, viewer)
-            if checkpoints := sorted((run_dir / "checkpoints").glob("*.state")):
-                game.load_state(checkpoints[-1].read_bytes())
+        start = partial(Emulator, core_path(meta["core"]), rom, options=meta["core_options"])
+        game = Game(start(), adapter, speed, viewer, start)
+        try:
+            if state := latest_state(run_dir):
+                game.load_state(state)
             if viewer:
-                viewer.frame = emu.frame()
+                viewer.frame = game.emu.frame()
             server = GameServer(game, memory, run_dir / "notes.md", data_dir / "harness-issues.md")
             runner = Runner(run_dir, game, server, model=model, effort=effort)
-            runner.restore_context(checkpoints[-1] if checkpoints else None)
-            origin = checkpoints[-1].name if checkpoints else "power-on"
-            runner.log("start", f"{meta['game']}; {version}; from {origin}")
+            runner.log("start", f"{meta['game']}; {version}; from {'the last state' if state else 'power-on'}")
             url = server.start()
             reason = "error"
             try:
@@ -456,11 +556,12 @@ def play(
             except KeyboardInterrupt:
                 reason = "interrupted"
             except EmulatorError as e:
-                # ponytail: no automatic restart yet (phase 5b); resume continues from the last checkpoint
-                reason = f"the emulator failed ({e}); resume continues from the last checkpoint"
+                reason = f"the emulator failed ({e}); resume continues from the last state"
             finally:
                 with contextlib.suppress(EmulatorError):  # nothing to save once the emulator is gone
                     runner.checkpoint("stop")
                 server.stop()
                 runner.log("stop", reason)
             return reason
+        finally:
+            game.emu.close()

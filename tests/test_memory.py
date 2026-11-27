@@ -1,3 +1,4 @@
+import math
 import sqlite3
 import time
 
@@ -132,7 +133,7 @@ def test_knowledge_scopes_evidence_and_search(tmp_path):
     assert [e["id"] for e in blue.search(query, 10)] == [newer]
 
 
-def test_superseding_needs_a_replacement_as_wide_and_restore_drops_later_progress(tmp_path):
+def test_superseding_needs_a_replacement_as_wide(tmp_path):
     red = open_memory(tmp_path)
     general = red.add_knowledge("lesson", "Menus", "read the cursor", scope="general")
     narrow = red.add_knowledge("lesson", "Menus", "red only", scope="rom")
@@ -140,28 +141,26 @@ def test_superseding_needs_a_replacement_as_wide_and_restore_drops_later_progres
         red.set_knowledge_status(general, "hypothesis", superseded_by=narrow)
     red.set_knowledge_status(narrow, "hypothesis", superseded_by=general)
 
-    red.add_knowledge("progress", "Badge", "earned", scope="run")
-    red.event("checkpoint", {"file": "1.state", "reason": "test"})
-    time.sleep(0.01)
-    red.add_knowledge("progress", "Parcel", "delivered", scope="run")
-    red.discard_progress_after("1.state")
-    assert {e["topic"] for e in red.search("badge parcel", 10)} == {"Badge"}
 
-
-def test_power_on_restore_refutes_all_progress(tmp_path):
+def test_a_branch_leaves_progress_after_the_checkpoint_behind(tmp_path):
     red = open_memory(tmp_path)
-    red.add_knowledge("progress", "Parcel", "acquired", scope="run")
-    red.add_knowledge("lesson", "Menus", "read the cursor", scope="general")
-    red.discard_progress_after(None)
-    assert {e["topic"] for e in red.search("parcel menus", 10)} == {"Menus"}
-
-
-def test_restore_revives_progress_superseded_after_the_checkpoint(tmp_path):
-    red = open_memory(tmp_path)
-    old = red.add_knowledge("progress", "Parcel", "acquired", scope="run")
-    red.event("checkpoint", {"file": "1.state", "reason": "test"})
+    first = red.timeline()
+    badge = red.add_knowledge("progress", "Badge", "earned", scope="run", evidence=red.event("action", {}))
+    parcel = red.add_knowledge("progress", "Parcel", "acquired", scope="run")
+    lesson = red.add_knowledge("lesson", "Menus", "read the cursor", scope="general")
+    red.event("checkpoint", {"file": "1.state"})
+    checkpoint = red.events("checkpoint")[-1]
     time.sleep(0.01)
-    new = red.add_knowledge("progress", "Parcel", "delivered", scope="run")
-    red.set_knowledge_status(old, "stale", superseded_by=new)
-    red.discard_progress_after("1.state")
-    assert [e["id"] for e in red.search("parcel", 10)] == [old]
+    delivered = red.add_knowledge("progress", "Parcel", "delivered", scope="run")
+    red.set_knowledge_status(parcel, "stale", superseded_by=delivered)
+    later_lesson = red.add_knowledge("lesson", "Ledges", "jump down only", scope="general")
+    lost = red.event("action", {})
+    assert red.branch(checkpoint) == [delivered]
+    second = red.timeline()
+    assert second != first and red.history() == {second: math.inf, first: checkpoint["created"]}
+    status = dict(red.rows("SELECT id, status FROM knowledge"))
+    assert (status[badge], status[parcel], status[delivered]) == ("confirmed", "hypothesis", "stale")
+    assert (status[lesson], status[later_lesson]) == ("hypothesis", "hypothesis")  # learning is durable
+    assert {e["id"] for e in red.search("parcel", 10)} == {parcel, delivered}
+    with pytest.raises(ValueError, match="current timeline"):  # an undone action is no evidence
+        red.set_knowledge_status(parcel, "confirmed", evidence=lost)

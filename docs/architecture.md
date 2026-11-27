@@ -57,9 +57,8 @@ Thin interfaces exist only at these seams, each with one implementation for now:
   - `ram_hash`: sha256 of system RAM plus save RAM;
   - `save_state` / `load_state`.
 - There is no write operation.
-- Checkpoints, timelines and the persisted input log arrive with the run store (phases 4–5), so they are written
-  once in their final SQLite form. The replay property they rely on (same state plus same inputs gives the same RAM
-  hash and the same state) is tested now.
+- Checkpoints and timelines live in the run directory and the memory store (phases 4–5). Running the same inputs
+  from the same state gives the same RAM hash and state (tested), although recovery never replays inputs.
 
 ## Game adapter: Pokémon Red/Blue *(implemented, phase 3)*
 
@@ -84,15 +83,17 @@ text is stored in the repository; `gen1_map_names.txt` holds only the map consta
 
 ## Play loop *(implemented, phase 4)*
 
-`pokeagent play --rom PATH [--objective TEXT]` creates a run; `pokeagent resume RUN` continues one from its latest
-checkpoint. Both take `--max-sessions`, `--model`, `--effort`, `--watch` (Tk window with the frame and the last
+`pokeagent play --rom PATH [--objective TEXT]` creates a run; `pokeagent resume RUN` continues one where it stopped.
+Both take `--max-sessions`, `--model`, `--effort`, `--watch` (Tk window with the frame and the last
 action) and `--watch-speed` (a multiple of real time; uncapped by default).
 
 - **Run directory** (`<data dir>/runs/<id>/`, mode 0700): `run.json` (objective, trusted check, ROM path and
   sha1, core and options; written once), `state.json` (session count, last summary and focus), `notes.md`,
-  `play.log` (one line per message, tool call and lifecycle event), `checkpoints/` (the last 10 states, written
-  atomically every 25 actions, at every session end and on stop), `sessions/NNNN.jsonl` (raw streams) and
-  `web.jsonl` (the web hook's log). Harness issues go to `<data dir>/harness-issues.md`.
+  `play.log` (one line per message, tool call and lifecycle event), `recovery.state` (the game after the last
+  action, rewritten atomically after every action), `checkpoints/` (the last 10 states with their notes and
+  progress, written every 25 actions, at every session end and on stop), `sessions/NNNN.jsonl` (raw streams),
+  `web.jsonl` (the web hook's log) and `.lock` (one pokeagent process per run). Harness issues go to
+  `<data dir>/harness-issues.md`.
 - **Objective:** only the adapter's default objective gets its trusted check (Red/Blue: the Hall of Fame map),
   evaluated before every session once a game is in progress (power-on RAM is noise that could match by chance).
   A custom objective has only the user's `--success` check, if any (see Objectives below).
@@ -109,8 +110,11 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
   - `auth_error`: stops the run; `InitRejected` stops it before any model request;
   - `error`: backs off 30 s, 60 s, …; five in a row stop the run;
   - `completed`, `max_turns` and `timeout` continue with the next session.
-  - If the emulator worker fails, every game tool refuses with the reason, the run stops after the session and
-    `resume` continues from the last checkpoint (automatic recovery comes with the input log in phase 5).
+  - If the emulator worker fails, a new one starts at `recovery.state` (or the latest checkpoint, or power-on) and
+    the failed call reports that it had no effect, so at most that one action is lost. After three restarts in one
+    `play`, every game tool refuses with the reason and the run stops after the session.
+- **Resume** loads `recovery.state` (else the latest checkpoint, else power-on). Notes and progress are current with
+  it, so nothing is replayed or restored.
 - **State before a game:** until a game is started or loaded, the adapter reports only the screen, because WRAM
   holds SameBoy's randomised power-on contents.
 - **Prompt:** `prompts/play.md` explains the tools, the budget, what persists and the rules (controller input
@@ -168,7 +172,7 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
 
   Malformed hook input is blocked too.
 
-## Objectives, memory, timelines *(objectives and knowledge implemented in phase 5a; timelines planned)*
+## Objectives, memory, timelines *(implemented, phase 5)*
 
 - **Store:** `<data dir>/memory.db`, one SQLite database shared by every run so knowledge carries across runs. A run is
   recorded from its `run.json` the first time it is opened; afterwards the database decides and `run.json` must
@@ -177,10 +181,12 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
   - `checks`: condition, source and reason never change and no check is deleted. Sources are `adapter` (the default
     objective's trusted check), `user` (`--success`, or an approved proposal) and `agent`. An agent's check is never
     `active` (authoritative); only `proposed` moves to `approved` or `rejected`.
-  - `events`: append-only (actions, session starts and ends with usage and cost, checkpoints, claims).
+  - `events`: append-only (actions, session starts and ends with usage and cost, checkpoints with their core and ROM
+    identity, restores, emulator restarts, claims).
   - `knowledge`: topic and content never change and nothing is deleted; status (`hypothesis`, `confirmed`,
     `refuted`, `stale`), evidence and `superseded_by` do. FTS5 indexes topic and content.
-  - `timelines`: every run starts on one; restores (planned) branch new ones. Events and knowledge record theirs.
+  - `timelines`: every run starts on one; a restore branches a new one from its checkpoint (parent and branch
+    checkpoint) and abandons the current one. Events and knowledge record theirs.
 - **Conditions:** `{"obs", "op", "value"}` over the adapter's observations, combined with `all`, `any` and `not`.
 - **Judging,** before every session once a game is in progress: an active check that holds completes the run. The
   agent's latest proposed check that holds, or `report_objective_complete` without any active check, sets the run to
@@ -195,10 +201,17 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
 - **Brief:** objective; each check with its source and whether it holds now; the latest proposal; the observations
   with their values; a rejected claim; the last summary (or one generated from the session's last actions when it
   ended without `end_session`); notes; the top 5 knowledge entries matching the current map and the planned focus;
-  the current state.
-- Restoring a checkpoint opens a new timeline: timeline-bound state (goals, milestones, notes, progress knowledge,
-  timeline KV) reverts; durable learning (knowledge, capabilities, durable KV) stays. Crash recovery replays only the
-  current timeline's inputs, verified by RAM hashes.
+  a restore since the last session; the current state.
+- **Restore:** `pokeagent restore RUN` lists the checkpoints of the current timeline's history (its own, and its
+  ancestors' up to where it branched); `pokeagent restore RUN CHECKPOINT` takes a stopped run back to one:
+  - refused when the checkpoint was saved with another ROM, core or core options than the run's;
+  - a new timeline starts at the checkpoint; the abandoned part (later checkpoints and actions) is out of reach, so
+    its actions are no evidence and its checkpoints cannot be restored;
+  - progress knowledge recorded after the checkpoint becomes `stale`; progress entries changed after it go back to
+    unsuperseded hypotheses; durable knowledge (every other kind) and later capabilities stay;
+  - the game (`recovery.state`), notes and planned focus become the checkpoint's; the session count stays;
+  - the next brief says when the checkpoint was saved, how many actions were undone, which entries went stale and
+    which note lines were dropped.
 
 ## Capabilities *(planned)*
 
@@ -343,13 +356,23 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
 - **2026-11-27: Game names come from the user's ROM at runtime,** not from tables in the repository, and the walk grid
   is computed from the map and tileset data in RAM and ROM instead of hand-written maps.
 - **2026-11-27: Timeline-bound context is saved with each checkpoint.** `notes.md` and `state.json` are copied next to
-  the `.state` file and restored on resume, so a restored timeline never briefs the agent with progress it lost. Run
-  directories are resolved to absolute paths because the Claude child runs with the run directory as its cwd.
+  the `.state` file, and a restore brings them back with the game, so a restored timeline never briefs the agent with
+  progress it lost. Run directories are resolved to absolute paths because the Claude child runs with the run
+  directory as its cwd.
 - **2026-11-27: One SQLite memory store per data directory, with the rules in triggers.** Runs share it so knowledge
   found in one run is there for the next. Immutability (objective, checks, events, knowledge text) is enforced by the
   database for every writer, so a bug in pokeagent cannot quietly rewrite a run's objective or history either.
 - **2026-11-27: Knowledge is confirmed only by evidence from the run's own game,** an action event of its current
   timeline. Web pages and the agent's own reasoning produce hypotheses; the brief and searches show the status.
-- **2026-11-27: Restoring a checkpoint refutes progress knowledge recorded after it, and a replacement must be at
-  least as widely scoped as the entry it supersedes.** The lost game progress must not be offered as fact on resume,
-  and a narrow replacement would hide a shared entry from runs that cannot see the replacement.
+- **2026-11-27: A replacement knowledge entry must be at least as widely scoped as the entry it supersedes,** or it
+  would hide a shared entry from runs that cannot see the replacement.
+- **2026-11-27 (Wout): Crash recovery uses a recovery state after every action instead of an input log and replay.**
+  A state is about 250 KB and takes milliseconds, so resume and emulator restarts lose at most the interrupted action.
+  Nothing is ever replayed, so an abandoned timeline cannot be replayed by accident, and there are no RAM hashes,
+  input log or replay command to keep correct.
+- **2026-11-27 (Wout): No goal tools.** In live run 1a the agent kept its plan in its notes and `next_focus`, which
+  already travel with checkpoints. Milestones will be derived from game state for stats and stuck detection
+  (phase 7) instead of being declared by the agent.
+- **2026-11-27: Restores go back only along the current timeline's history.** Restoring into an abandoned branch
+  would need to bring back progress knowledge that an earlier restore made stale; it is not needed by the stuck
+  ladder, which restores the last checkpoint that made progress.

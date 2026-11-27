@@ -13,6 +13,7 @@ The triggers enforce these rules for every writer, not only for this module.
 
 import contextlib
 import json
+import math
 import re
 import sqlite3
 import threading
@@ -216,7 +217,8 @@ class Memory:
         )
 
     def events(self, kind: str, session: int | None = None, after: int = 0, limit: int = 100) -> list[dict]:
-        """The run's latest `kind` events (optionally of one session, after an event id), oldest first."""
+        """The run's latest `kind` events (optionally of one session, after an event id; limit -1 for all), oldest
+        first."""
         sql = "SELECT * FROM events WHERE run = ? AND kind = ? AND id > ?"
         args = [self.run, kind, after]
         if session is not None:
@@ -308,34 +310,41 @@ class Memory:
         scope = self.rows("SELECT scope FROM knowledge WHERE id = ?", entry)[0]["scope"]
         return list(self.scopes.values()).index(scope)  # run narrowest, general widest
 
-    def discard_progress_after(self, checkpoint_file: str | None) -> None:
-        """Refute this run's progress knowledge recorded after the checkpoint `checkpoint_file` (None: since
-        power-on): restoring it loses that game progress, so it must not be offered as fact."""
-        since = 0.0
-        if checkpoint_file is not None:
-            found = [e for e in self.events("checkpoint", limit=1000) if e["data"]["file"] == checkpoint_file]
-            if not found:
-                return
-            since = found[-1]["created"]
-        # an older entry that a later (now refuted) one superseded is live again; "stale" came from that replacement
-        self.write(
-            "UPDATE knowledge SET superseded_by = NULL, updated = ?,"
-            " status = CASE WHEN status = 'stale' THEN 'hypothesis' ELSE status END"
-            " WHERE run = ? AND kind = 'progress' AND created <= ? AND superseded_by IN"
-            " (SELECT id FROM knowledge WHERE run = ? AND kind = 'progress' AND created > ?)",
-            time.time(),
-            self.run,
-            since,
-            self.run,
-            since,
-        )
-        self.write(
-            "UPDATE knowledge SET status = 'refuted', updated = ? WHERE run = ? AND kind = 'progress'"
-            " AND created > ? AND status != 'refuted'",
-            time.time(),
-            self.run,
-            since,
-        )
+    def history(self) -> dict[int, float]:
+        """The current timeline's history: each timeline in it, mapped to the time up to which it belongs (the current
+        one entirely). A timeline branched from a checkpoint inherits its parent's history up to that checkpoint."""
+        timelines = {row["id"]: row for row in self.rows("SELECT * FROM timelines WHERE run = ?", self.run)}
+        saved = {(e["timeline"], e["data"]["file"]): e["created"] for e in self.events("checkpoint", limit=-1)}
+        history, timeline, until = {}, self.timeline(), math.inf
+        while timeline is not None:
+            history[timeline] = until
+            row = timelines[timeline]
+            timeline = row["parent"]
+            if timeline is not None:
+                until = saved[(timeline, row["branch"])]
+        return history
+
+    def branch(self, checkpoint: dict) -> list[int]:
+        """Make a new current timeline from `checkpoint` (a checkpoint event of the current history) and abandon the
+        current one. Progress knowledge recorded after the checkpoint becomes stale (the game no longer has that
+        progress), and progress entries changed after it go back to unconfirmed, unsuperseded hypotheses. Durable
+        knowledge stays as it is. Returns the ids made stale."""
+        now, since = time.time(), checkpoint["created"]
+        later = "run = ? AND kind = 'progress' AND created > ? AND status IN ('hypothesis', 'confirmed')"
+        with self.transaction() as db:
+            db.execute("UPDATE timelines SET status = 'abandoned' WHERE run = ? AND status = 'current'", (self.run,))
+            db.execute(
+                "INSERT INTO timelines (run, parent, branch, status, created) VALUES (?, ?, ?, 'current', ?)",
+                (self.run, checkpoint["timeline"], checkpoint["data"]["file"], now),
+            )
+            stale = [row[0] for row in db.execute(f"SELECT id FROM knowledge WHERE {later}", (self.run, since))]
+            db.execute(f"UPDATE knowledge SET status = 'stale', updated = ? WHERE {later}", (now, self.run, since))
+            db.execute(
+                "UPDATE knowledge SET status = 'hypothesis', evidence = NULL, superseded_by = NULL, updated = ?"
+                " WHERE run = ? AND kind = 'progress' AND created <= ? AND updated > ?",
+                (now, self.run, since, since),
+            )
+        return stale
 
     def _visible(self, entry: int) -> bool:
         return bool(

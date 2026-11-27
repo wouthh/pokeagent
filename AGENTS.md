@@ -58,7 +58,7 @@ first use case, not an architectural constraint. Design and decisions: [docs/arc
   home, read-only system and ROM).
 - Game progress happens only through controller inputs. RAM access is read-only, and only for RAM regions.
 - The run's objective and its authoritative success checks are immutable; agent-proposed checks never complete a run.
-- Learned knowledge and capabilities survive a checkpoint restore; timeline-bound progress (goals, milestones, notes,
+- Learned knowledge and capabilities survive a checkpoint restore; timeline-bound progress (notes, planned focus,
   progress knowledge) does not.
 
 ## Validation

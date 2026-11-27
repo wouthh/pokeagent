@@ -4,6 +4,7 @@ import argparse
 import contextlib
 import json
 import sys
+import time
 from pathlib import Path
 
 from pokeagent import __version__
@@ -39,6 +40,10 @@ def build_parser() -> argparse.ArgumentParser:
     objective.add_argument("run", help="run id or run folder")
     objective.add_argument("--reason", default="", help="for reject: what is still missing (the agent reads it)")
     objective.add_argument("--data-dir", type=Path, help="where runs live (default ~/.local/share/pokeagent)")
+    restore = commands.add_parser("restore", help="take a stopped run back to one of its checkpoints")
+    restore.add_argument("run", help="run id or run folder")
+    restore.add_argument("checkpoint", nargs="?", help="checkpoint file name (omit to list them)")
+    restore.add_argument("--data-dir", type=Path, help="where runs live (default ~/.local/share/pokeagent)")
     hook = commands.add_parser("hook", help="hooks called by Claude sessions (internal)")
     hook.add_argument("kind", choices=["web"])
     hook.add_argument("--log", type=Path, required=True)
@@ -81,6 +86,24 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"claim rejected; continue with `pokeagent resume {run_dir.name}`")
                 else:
                     print(f"approved as a user check: {objectives.describe(objectives.approve_check(memory))}")
+        except (OSError, ValueError) as e:
+            print(f"pokeagent: {e}", file=sys.stderr)
+            return 1
+    elif args.command == "restore":
+        from pokeagent import play
+
+        try:
+            run_dir, data_dir = find_run(args.run, args.data_dir)
+            with play.run_lock(run_dir), contextlib.closing(play.open_memory(run_dir, data_dir)) as memory:
+                if args.checkpoint:
+                    done = play.restore(run_dir, memory, args.checkpoint)
+                    print(f"restored {done['file']}; {done['undone_actions']} actions undone, on a new timeline")
+                else:
+                    for event in play.restorable(run_dir, memory):
+                        saved = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(event["created"]))
+                        print(
+                            f"{event['data']['file']}  {saved}  timeline {event['timeline']}  {event['data']['reason']}"
+                        )
         except (OSError, ValueError) as e:
             print(f"pokeagent: {e}", file=sys.stderr)
             return 1

@@ -135,3 +135,16 @@ def test_knowledge_and_objective_tools(server):
     assert claimed.startswith("Recorded") and s.sessions[token].claim == "caught one"
     s.memory.add_check(badge, "user")
     assert text(call(url, token, "report_objective_complete", {"evidence": "x"})).startswith("Not recorded")
+
+
+def test_a_failed_emulator_is_restarted_while_restarts_remain(server):
+    s, url = server
+    token = s.open_session(1, budget=10).token
+    restarts = []
+    s.recover = lambda error: restarts.append(error) or len(restarts) < 2
+    crashed = text(call(url, token, "press", {"button": "crash"}))
+    assert "was restarted" in crashed and "had no effect" in crashed and restarts == ["emulator worker exited with -9"]
+    assert s.broken is None and not call(url, token, "press", {"button": "a"}).is_error
+    assert s.memory.events("action")[-1]["data"]["args"] == {"button": "a", "times": 1}  # no event for the crash
+    assert "end the session" in text(call(url, token, "press", {"button": "crash"}))
+    assert s.broken and "emulator has stopped" in text(call(url, token, "get_state"))
