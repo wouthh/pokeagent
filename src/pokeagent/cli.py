@@ -11,9 +11,16 @@ def build_parser() -> argparse.ArgumentParser:
         description="Autonomous, self-improving agent that plays emulated games.",
     )
     parser.add_argument("--version", action="version", version=f"pokeagent {__version__}")
+    commands = parser.add_subparsers(dest="command", metavar="COMMAND")
+    commands.add_parser("fetch-cores", help="download the pinned libretro cores into the user cache (once)")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    build_parser().parse_args(argv)
+    args = build_parser().parse_args(argv)
+    if args.command == "fetch-cores":
+        from pokeagent.emulator.cores import cores_dir, fetch_cores
+
+        if installed := fetch_cores():
+            print(f"installed {', '.join(installed)} into {cores_dir()}")
     return 0

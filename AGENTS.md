@@ -12,7 +12,11 @@ first use case, not an architectural constraint. Design and decisions: [docs/arc
 ## Repository map and instruction precedence
 
 - `src/pokeagent/`: the package; `cli.py` is the entry point (`pokeagent`, also `python -m pokeagent`).
-- `tests/`: pytest suite; runs without any ROM. ROM-dependent tests skip unless `POKEAGENT_RED_ROM` points to a dump.
+  - `sandbox.py`: bwrap argv, in-namespace rlimits, the fail-closed probe (`ensure()`).
+  - `emulator/`: `cores.py` (pinned core download and checksum), `worker.py` (one core per sandboxed process, JSON
+    line + bytes protocol, no memory-write op), `client.py` (`Emulator`, the orchestrator's handle).
+- `tests/`: pytest suite; runs without any game ROM. `tests/fixtures/` holds the MIT dmg-acid2 test ROM, its
+  reference image and licence. ROM-dependent tests skip unless `POKEAGENT_RED_ROM` points to a dump.
 - `scripts/check.sh`: the full local gate. `.prloop.json`: review-loop config.
 - `docs/architecture.md`: components, isolation, data boundaries, verified spike facts and the Decisions log.
 - `.github/workflows/ci.yml`: lint and ROM-free tests on push/PR. Informational; not a prloop gate.
@@ -57,9 +61,11 @@ Full local gate: scripts/check.sh
 ROM checks:      POKEAGENT_RED_ROM=/path/to/your/dump.gb uv run pytest -q
 ```
 
-The gate needs uv (Python 3.13 is fetched by uv). It runs ruff check, ruff format --check and pytest, and fails on
-tracked ROM/save/state files. Measured 2026-11-27 (bootstrap): 0.7 s wall time, one core, 45 MB RSS. Re-measure
-when the gate changes. CI runs the same gate without a ROM; prloop does not wait on it.
+The gate needs uv (Python 3.13 is fetched by uv), `bwrap` with unprivileged user namespaces, and `7z`. It runs ruff
+check, ruff format --check, `pokeagent fetch-cores` (a one-time 274 MB download per machine), and pytest, and fails
+on tracked ROM/save/state files. Sandbox tests never skip: a missing sandbox fails the gate. Measured 2026-11-27
+(phase 2, cores cached, E-cores): 7.4 s wall time, about one core, under 100 MB RSS. Re-measure when the gate
+changes. CI runs the same gate without a game ROM; prloop does not wait on it.
 
 ## Delivery
 
