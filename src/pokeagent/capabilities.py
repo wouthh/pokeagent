@@ -201,8 +201,8 @@ def check_args(spec: dict, args: dict) -> None:
 def _holds(condition: dict, observe) -> bool:
     try:
         return objectives.holds(condition, observe())
-    except TypeError as e:  # e.g. a text observation compared with a number
-        raise CapabilityError(f"condition {objectives.describe(condition)} cannot be evaluated: {e}") from None
+    except (TypeError, KeyError) as e:  # e.g. a text observation compared with a number, or one this ROM lacks
+        raise CapabilityError(f"condition {objectives.describe(condition)} cannot be evaluated: {e!r}") from None
 
 
 def execute(spec: dict, args: dict, act, observe, lookup, budget: list[int] | None = None, depth: int = 0) -> list[str]:

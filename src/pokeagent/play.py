@@ -242,7 +242,7 @@ class Game:
         match name:
             case "press":
                 button, times = args.get("button"), args.get("times", 1)
-                if button not in BUTTONS:
+                if not isinstance(button, str) or button not in BUTTONS:
                     raise ValueError(f"button must be one of {', '.join(BUTTONS)}")
                 if not isinstance(times, int) or not 1 <= times <= 10:
                     raise ValueError("times must be 1..10")
@@ -251,7 +251,7 @@ class Game:
                 return f"pressed {button} x{times}"
             case "walk":
                 direction, steps = args.get("direction"), args.get("steps", 1)
-                if direction not in DIRECTIONS:
+                if not isinstance(direction, str) or direction not in DIRECTIONS:
                     raise ValueError(f"direction must be one of {', '.join(DIRECTIONS)}")
                 if not isinstance(steps, int) or not 1 <= steps <= 20:
                     raise ValueError("steps must be 1..20")
