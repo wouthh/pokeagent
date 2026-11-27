@@ -323,6 +323,18 @@ def test_success_is_judged_before_a_stuck_restore(tmp_path):
     assert "complete" in runner.game.viewer.panel.splitlines()[0]
 
 
+def test_the_viewer_panel_shows_a_stuck_level_when_it_is_reached(tmp_path):
+    runner, _, _ = make_runner(tmp_path, [(SessionResult("completed"), None)])
+    runner.game.viewer = SimpleNamespace(panel="")
+    notice = ""
+    for _ in range(4 * stuck.STEP):
+        runner.game.x = 1 - runner.game.x
+        _, notice = runner._after_action()
+        if notice:
+            break
+    assert notice and "level 1" in runner.game.viewer.panel
+
+
 def test_the_viewer_panel_follows_the_run(tmp_path):
     runner, _, _ = make_runner(tmp_path, [(SessionResult("completed"), "found the lab")])
     runner.game.viewer = SimpleNamespace(panel="")
