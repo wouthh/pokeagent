@@ -13,12 +13,12 @@ def played(tmp_path, run, cost, waited=0.0):
     usage = {"input_tokens": 1000, "output_tokens": 500, "cache_read_input_tokens": 9000}
     memory.event("session_start", {}, 1)
     memory.event("milestone", {"kind": "map", "map_id": 1, "text": "first visit to Pallet Town"}, 1)
-    memory.event("action", {"outcome": "walk"}, 1)
+    memory.event("action", {"name": "walk", "args": {"direction": "up", "steps": 1}, "outcome": "walk"}, 1)
     if waited:
         memory.event("limit_wait", {"seconds": waited})
     memory.event("capability_call", {"id": 1, "name": "heal", "version": 1, "error": "stuck"}, 1)
     memory.event("milestone", {"kind": "badge", "badges": 1, "text": "badge 1"}, 1)
-    memory.event("action", {"outcome": "walk"}, 1)
+    memory.event("action", {"name": "walk", "args": {"direction": "up", "steps": 1}, "outcome": "walk"}, 1)
     memory.event("session_end", {"end": "completed", "turns": 9, "actions": 2, "cost_usd": cost, "usage": usage}, 1)
     memory.event("session_start", {"mode": "develop"}, 2)
     memory.event("development_cycle", {"tool": "step", "staged": 1, "attempt": 1}, 2)
@@ -92,7 +92,7 @@ def test_an_interrupted_session_is_reported(tmp_path):
     memory = Memory(tmp_path / "memory.db", "r")
     memory.open_run(META)
     memory.event("session_start", {}, 1)
-    memory.event("action", {"outcome": "walk"}, 1)
+    memory.event("action", {"name": "walk", "args": {"direction": "up", "steps": 1}, "outcome": "walk"}, 1)
     memory.event("milestone", {"kind": "map", "map_id": 1, "text": "first visit to Pallet Town"}, 1)
     (row,) = stats.sessions(memory)
     assert (row["end"], row["actions"], row["milestones"], row["mode"]) == ("interrupted", 1, 1, "play")
@@ -109,3 +109,23 @@ def test_the_open_session_of_a_live_run_is_running(tmp_path):
         assert stats.live(tmp_path)
         assert [r["end"] for r in stats.sessions(memory, stats.live(tmp_path))] == ["interrupted", "running"]
     assert not stats.live(tmp_path)
+
+
+def test_efficiency_shows_recent_sessions_and_repeated_actions(tmp_path):
+    memory = Memory(tmp_path / "memory.db", "r")
+    memory.open_run(META)
+    assert stats.efficiency(memory) == []
+    press = {"name": "press", "args": {"button": "a", "times": 1}}
+    macro = {"name": "run_macro", "args": {"capability": "heal", "args": {}}}
+    for n in (1, 2):
+        memory.event("session_start", {}, n)
+        for call in [press, press, macro] * (3 * n):
+            memory.event("action", call | {"outcome": "done"}, n)
+        memory.event("session_end", {"end": "completed", "turns": 9, "actions": 9 * n, "cost_usd": 0.5 * n}, n)
+    first, repeated, sequences = stats.efficiency(memory)
+    assert first == "Recent play sessions (actions, milestones, cost): session 1: 9, 0, $0.50; session 2: 18, 0, $1.00"
+    assert repeated == "Most repeated actions in session 2: press button=a times=1 x12; run_macro capability=heal x6"
+    assert sequences.startswith(
+        "Most repeated three-action sequences in session 2: press button=a times=1 > press button=a times=1"
+        " > run_macro capability=heal x6"
+    )

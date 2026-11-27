@@ -8,6 +8,7 @@ limit waits. The numbers are reported as measured.
 
 import fcntl
 import json
+from collections import Counter
 from pathlib import Path
 
 from pokeagent import capabilities, develop, objectives
@@ -88,6 +89,35 @@ def report(memory: Memory, live: bool = False) -> str:
         dev = sum(r["tokens"] for r in rows if r["mode"] == "develop")
         lines.append(f"development share: {dev / total:.0%} of tokens (cache reads excluded)")
     return "\n".join(lines)
+
+
+RECENT = 5  # play sessions the brief's efficiency line covers
+
+
+def _call(data: dict) -> str:
+    """An action as `name key=value ...`, such as `press button=a times=1`."""
+    args = (f"{k}={v if isinstance(v, str | int) else json.dumps(v)}" for k, v in data["args"].items() if v != {})
+    return " ".join([data["name"], *args])
+
+
+def efficiency(memory: Memory) -> list[str]:
+    """Brief lines on where recent play went: actions, milestones and cost of the last play sessions, and the last
+    one's most repeated actions and three-action sequences. Numbers only; what they mean is the agent's call."""
+    rows = [r for r in sessions(memory) if r["mode"] == "play"][-RECENT:]
+    if not rows:
+        return []
+    lines = [
+        "Recent play sessions (actions, milestones, cost): "
+        + "; ".join(f"session {r['session']}: {r['actions']}, {r['milestones']}, ${r['cost']:.2f}" for r in rows)
+    ]
+    last = rows[-1]["session"]
+    calls = [_call(e["data"]) for e in memory.events("action", session=last, limit=-1)]
+    if repeated := [f"{call} x{n}" for call, n in Counter(calls).most_common(5) if n > 1]:
+        lines.append(f"Most repeated actions in session {last}: " + "; ".join(repeated))
+    triples = Counter(tuple(calls[i : i + 3]) for i in range(len(calls) - 2) if len(set(calls[i : i + 3])) > 1)
+    if sequences := [f"{' > '.join(t)} x{n}" for t, n in triples.most_common(3) if n > 2]:
+        lines.append(f"Most repeated three-action sequences in session {last}: " + "; ".join(sequences))
+    return lines
 
 
 def _reached(memory: Memory) -> dict[str, dict]:
