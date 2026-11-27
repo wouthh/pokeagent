@@ -282,6 +282,18 @@ def test_milestones_and_a_stuck_run_that_restores_then_pauses(tmp_path):
     assert len(briefs) == 3
 
 
+def test_a_stuck_restore_ignores_checkpoints_of_an_earlier_ladder(tmp_path):
+    runner, _, _ = make_runner(tmp_path, [(SessionResult("completed"), None)])
+    runner._after_action()
+    runner.checkpoint("old ladder")  # as if saved before a resume: same score, another ladder instance
+    best = runner.ladder.best
+    runner.ladder = stuck.Ladder(runner.game.adapter)
+    runner.ladder.best = best
+    assert runner._restore_progress() is False
+    runner.checkpoint("new ladder")
+    assert runner._restore_progress() is True
+
+
 def test_a_badge_on_the_first_action_is_a_milestone_and_its_checkpoint_carries_the_badge_score(tmp_path):
     runner, _, _ = make_runner(tmp_path, [(SessionResult("completed"), None)])
     runner.game.badges = 1  # earned by the very first action after the start

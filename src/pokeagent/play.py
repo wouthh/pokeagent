@@ -397,7 +397,8 @@ class Runner:
             for name in CONTEXT_FILES:
                 old.with_suffix(f".{name}").unlink(missing_ok=True)
         identity = {key: self.meta[key] for key in IDENTITY}
-        data = {"file": path.name, "reason": reason, "best": self.ladder.best} | identity  # best: the ladder's
+        # best and ladder: the ladder's score and instance, for the stuck level 4 restore
+        data = {"file": path.name, "reason": reason, "best": self.ladder.best, "ladder": self.ladder.id} | identity
         self.memory.event("checkpoint", data)
         self.log("checkpoint", f"{path.name} ({reason})")
 
@@ -473,7 +474,12 @@ class Runner:
     def _restore_progress(self) -> bool:
         """Stuck level 4: go back to the first checkpoint saved after the last progress; False when there is none."""
         target = next(
-            (e for e in restorable(self.run_dir, self.memory) if e["data"].get("best") == self.ladder.best), None
+            (
+                e
+                for e in restorable(self.run_dir, self.memory)
+                if e["data"].get("ladder") == self.ladder.id and e["data"].get("best") == self.ladder.best
+            ),
+            None,
         )
         if target is None:
             return False

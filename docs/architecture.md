@@ -135,7 +135,7 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
   2. the action tools refuse until `reflect(analysis, plan)` (a free play tool, recorded as a `reflection` event);
   3. the session ends, and the next brief says how long the agent has been stuck and what comes next;
   4. the session ends and the runner restores the first checkpoint saved after the last progress (checkpoint
-     events record the ladder's best score) on a new timeline; with no such checkpoint it goes to level 5;
+     events record the ladder instance and its best score, so checkpoints from before a resume never match) on a new timeline; with no such checkpoint it goes to level 5;
   5. the session ends and the run stops with `stuck`; `resume` continues it.
 
   Progress resets the ladder. It is not saved, so a resumed run starts it over.

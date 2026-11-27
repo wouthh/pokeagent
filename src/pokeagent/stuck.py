@@ -13,6 +13,8 @@ experience or badge counts, so grinding is progress and pacing the same tiles or
 Progress resets the ladder. It lives in the runner, so it starts over when a run is resumed.
 """
 
+import time
+
 STEP = 40  # actions without progress per level
 TOP = 5
 
@@ -31,6 +33,7 @@ class Ladder:
         self.tiles: set[tuple[int, int, int]] = set()
         self.best: int | None = None
         self.since = 0  # completed actions since the last progress
+        self.id = time.time_ns()  # scores of different instances are not comparable (tiles restart on resume)
 
     @property
     def level(self) -> int:
