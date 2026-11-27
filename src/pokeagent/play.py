@@ -274,10 +274,10 @@ class Runner:
             case "limit":
                 self.log("limit", f"resets at {data['resets_at']}")
 
-    def checkpoint(self, reason: str) -> None:
+    def checkpoint(self, reason: str, state: bytes | None = None) -> None:
         folder = self.run_dir / "checkpoints"
         path = folder / f"{time.time_ns()}.state"
-        write_atomic(path, self.game.save_state())
+        write_atomic(path, self.game.save_state() if state is None else state)
         for name in CONTEXT_FILES:  # timeline-bound context travels with its checkpoint
             if (self.run_dir / name).exists():
                 shutil.copyfile(self.run_dir / name, path.with_suffix(f".{name}"))
@@ -290,10 +290,11 @@ class Runner:
         self.log("checkpoint", f"{path.name} ({reason})")
 
     def _after_action(self) -> None:
-        write_atomic(self.run_dir / "recovery.state", self.game.save_state())
+        state = self.game.save_state()  # one emulator save: a second one could fail after the action is committed
+        write_atomic(self.run_dir / "recovery.state", state)
         self._actions += 1
         if self._actions % CHECKPOINT_EVERY == 0:
-            self.checkpoint(f"{self._actions} actions")
+            self.checkpoint(f"{self._actions} actions", state)
 
     def recover(self, error: str) -> bool:
         """Restart a failed emulator at the state after the last completed action; False once restarts run out."""
@@ -492,6 +493,8 @@ def restore(run_dir: Path, memory: Memory, name: str) -> dict:
         "stale": stale,
         "dropped_notes": [line for line in old_notes.splitlines() if line.strip() and line not in kept][:40],
     }
+    if memory.status()[0] != "running":  # completion after the checkpoint is undone with the rest of the timeline
+        memory.set_status("running")
     memory.event("restore", data)
     return data
 
