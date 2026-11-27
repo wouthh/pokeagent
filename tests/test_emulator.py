@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from PIL import Image, ImageChops
 
-from pokeagent.emulator.client import Emulator, EmulatorError
+from pokeagent.emulator.client import Emulator, EmulatorError, RequestRefused
 from pokeagent.emulator.cores import core_path
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -46,14 +46,14 @@ def test_reads_ram_but_not_rom(emu):
     assert len(emu.read(0xC000, 0x2000)) == 0x2000
     assert len(emu.read(0xCFF0, 0x20)) == 0x20  # spans the two WRAM descriptors
     assert len(emu.read(0xFF80, 0x7F)) == 0x7F
-    with pytest.raises(EmulatorError, match="not readable"):
+    with pytest.raises(RequestRefused, match="not readable"):  # a tool error, not a dead worker
         emu.read(0x0100, 4)
 
 
 def test_rejects_bad_requests(emu):
-    with pytest.raises(EmulatorError, match="unknown buttons"):
+    with pytest.raises(RequestRefused, match="unknown buttons"):
         emu.run(["turbo"])
-    with pytest.raises(EmulatorError, match="state size"):
+    with pytest.raises(RequestRefused, match="state size"):
         emu.load_state(b"\0" * 16)
     emu.run(frames=1)  # the worker is still healthy
 

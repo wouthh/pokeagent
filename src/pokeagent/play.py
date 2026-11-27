@@ -21,8 +21,9 @@ from pathlib import Path
 
 from PIL import Image
 
-from pokeagent import objectives
+from pokeagent import capabilities, objectives
 from pokeagent.agents.claude_cli import ProviderError, SessionResult, SessionSpec, preflight, run_session
+from pokeagent.capabilities import Registry
 from pokeagent.emulator.client import Emulator, EmulatorError
 from pokeagent.emulator.cores import core_path
 from pokeagent.games.pokemon_gen1 import (
@@ -34,6 +35,7 @@ from pokeagent.games.pokemon_gen1 import (
     OBSERVATIONS,
     Gen1,
 )
+from pokeagent.games.pokemon_gen1 import decode as decode_text
 from pokeagent.memory import Memory, describe_knowledge
 from pokeagent.server import GameServer
 
@@ -82,10 +84,13 @@ def write_atomic(path: Path, data: bytes) -> None:
 class Game:
     """The live emulator and adapter. One lock serialises every call. The adapter drives this object as its
     emulator, so `run` can pace emulation (`speed` x real time) and feed the viewer. `start` makes a new emulator
-    for `restart`."""
+    for `restart`; `registry` holds the observations and macros the agent defined."""
 
-    def __init__(self, emu: Emulator, adapter: Gen1, speed: float | None = None, viewer=None, start=None):
+    def __init__(
+        self, emu: Emulator, adapter: Gen1, speed: float | None = None, viewer=None, start=None, registry=None
+    ):
         self.emu, self.adapter, self.speed, self.viewer, self.start = emu, adapter, speed, viewer, start
+        self.registry: Registry | None = registry  # the run's declarative capabilities
         self.lock = threading.Lock()
         self.fps = emu.info["fps"]
         self._shown = 0.0
@@ -126,7 +131,13 @@ class Game:
 
     def state_text(self) -> str:
         with self.lock:
-            return self.adapter.state_text(self.adapter.state(self))
+            return self._text(self.adapter.state(self))
+
+    def _text(self, state: dict) -> str:
+        text = self.adapter.state_text(state)
+        if shown := self._custom(shown_only=True):
+            text += "\nYour observations: " + ", ".join(f"{name}={value!r}" for name, value in shown.items())
+        return text
 
     def observations(self) -> dict:
         with self.lock:
@@ -141,62 +152,115 @@ class Game:
     def full_state(self) -> tuple[str, bytes]:
         with self.lock:
             state = self.adapter.state(self)
-            text = self.adapter.state_text(state)
+            text = self._text(state)
             if state["in_game"]:
                 grid = self.adapter.grid(self)
                 text += f"\n\nWhole map ({LEGEND}):\n{grid.render((state['x'], state['y']))}"
             return text, self.png()
 
+    def _custom(self, shown_only: bool = False) -> dict:
+        """The values of the run's active observations (call under the lock)."""
+        if self.registry is None:
+            return {}
+        return {
+            cap["name"]: self._decode(cap["spec"])
+            for cap in self.registry.active("observation")
+            if cap["spec"]["show"] or not shown_only
+        }
+
+    def _decode(self, spec: dict):
+        return capabilities.decode(spec, self.emu.read(spec["address"], spec["length"]), decode_text)
+
+    def _observations(self) -> dict:
+        """Builtin and the run's own observations, for macro conditions (call under the lock)."""
+        return self.adapter.observations(self.adapter.state(self)) | self._custom()
+
+    def peek(self, address: int, length: int) -> bytes:
+        """Read RAM (RAM regions only; ROM and unmapped addresses are refused)."""
+        with self.lock:
+            return self.emu.read(address, length)
+
+    def try_observation(self, spec: dict):
+        """Read and decode a new observation now, before it is defined."""
+        with self.lock:
+            return self._decode(spec)
+
     def act(self, name: str, **args) -> tuple[str, bytes | None]:
-        """Run one macro action; return a compact report and a screenshot when the screen mode changed."""
+        """Run one builtin action; return a compact report and a screenshot when the screen mode changed."""
         with self.lock:
             before = self.adapter.state(self)
-            outcome = self._do(name, args)
-            after = self.adapter.state(self)
-            old, new = self.adapter.fingerprint(before), self.adapter.fingerprint(after)
-            changed = [group for group in new if new[group] != old[group]]
-            lines = [f"{name}: {outcome}", f"Changed: {', '.join(changed) or 'nothing'}"]
-            if not after["in_game"] or set(changed) & {"party", "bag", "money", "battle"}:
-                lines.append(self.adapter.state_text(after))
-            else:
-                screen = after["screen"]
-                lines.append(
-                    f"Now: {after['map']} ({after['x']},{after['y']}) facing {after['facing']}; screen {screen['mode']}"
-                    + (" (yes/no prompt)" if screen["yes_no"] else "")
+            return self._report(name, self._do(name, args), before)
+
+    def run_macro(self, name: str, args: dict) -> tuple[str, bytes | None, dict, str | None]:
+        """Run a macro as one action: (report, screenshot, the capability, error or None). A macro that fails part
+        way still reports the state it left behind."""
+        with self.lock:
+            macro = self.registry.get(name, "macro")
+            capabilities.check_args(macro["spec"], args)  # a bad call is refused, not counted against the macro
+            before = self.adapter.state(self)
+            try:
+                outcomes = capabilities.execute(
+                    macro["spec"], args, self._do, self._observations, lambda n: self.registry.get(n, "macro")["spec"]
                 )
-                if after["screen_text"]:
-                    lines.append("Screen text:\n" + "\n".join("  " + line for line in after["screen_text"]))
-            if after["in_game"] and after["screen"]["mode"] == "overworld":
-                crop = self.adapter.grid(self).render((after["x"], after["y"]), radius=4)
-                lines.append(f"Nearby ({LEGEND}):\n{crop}")
-            if self.viewer:
-                self.viewer.status = f"{name}: {outcome} | {after['map']} ({after['x']},{after['y']})"
-            mode_changed = before["screen"]["mode"] != after["screen"]["mode"]
-            return "\n".join(lines), self.png() if mode_changed else None
+                error, outcome = (
+                    None,
+                    f"done after {len(outcomes)} action(s)" + (f"; the last: {outcomes[-1]}" if outcomes else ""),
+                )
+            except ValueError as e:  # CapabilityError, a refused builtin action or a refused request
+                error, outcome = str(e), f"failed: {e}"
+            text, png = self._report(f"run_macro {name}", outcome, before)
+            return text, png, macro, error
+
+    def _report(self, name: str, outcome: str, before: dict) -> tuple[str, bytes | None]:
+        after = self.adapter.state(self)
+        old, new = self.adapter.fingerprint(before), self.adapter.fingerprint(after)
+        changed = [group for group in new if new[group] != old[group]]
+        lines = [f"{name}: {outcome}", f"Changed: {', '.join(changed) or 'nothing'}"]
+        if not after["in_game"] or set(changed) & {"party", "bag", "money", "battle"}:
+            lines.append(self._text(after))
+        else:
+            screen = after["screen"]
+            lines.append(
+                f"Now: {after['map']} ({after['x']},{after['y']}) facing {after['facing']}; screen {screen['mode']}"
+                + (" (yes/no prompt)" if screen["yes_no"] else "")
+            )
+            if after["screen_text"]:
+                lines.append("Screen text:\n" + "\n".join("  " + line for line in after["screen_text"]))
+        if after["in_game"] and after["screen"]["mode"] == "overworld":
+            crop = self.adapter.grid(self).render((after["x"], after["y"]), radius=4)
+            lines.append(f"Nearby ({LEGEND}):\n{crop}")
+        if self.viewer:
+            self.viewer.status = f"{name}: {outcome} | {after['map']} ({after['x']},{after['y']})"
+        mode_changed = before["screen"]["mode"] != after["screen"]["mode"]
+        return "\n".join(lines), self.png() if mode_changed else None
 
     def _do(self, name: str, args: dict) -> str:
+        """One builtin action. Also the step runner of macros, whose steps may leave out optional arguments."""
         adapter = self.adapter
         if name in ("walk", "walk_to") and not adapter.state(self)["in_game"]:
             raise ValueError("no game is in progress yet; use press and advance_text until one is")
         match name:
             case "press":
-                button, times = args["button"], args["times"]
+                button, times = args.get("button"), args.get("times", 1)
                 if button not in BUTTONS:
                     raise ValueError(f"button must be one of {', '.join(BUTTONS)}")
-                if not 1 <= times <= 10:
+                if not isinstance(times, int) or not 1 <= times <= 10:
                     raise ValueError("times must be 1..10")
                 for _ in range(times):
                     adapter.press(self, button)
                 return f"pressed {button} x{times}"
             case "walk":
-                direction, steps = args["direction"], args["steps"]
+                direction, steps = args.get("direction"), args.get("steps", 1)
                 if direction not in DIRECTIONS:
                     raise ValueError(f"direction must be one of {', '.join(DIRECTIONS)}")
-                if not 1 <= steps <= 20:
+                if not isinstance(steps, int) or not 1 <= steps <= 20:
                     raise ValueError("steps must be 1..20")
                 result = adapter.walk(self, direction, steps)
             case "walk_to":
-                result = adapter.walk_to(self, args["x"], args["y"])
+                x, y = args.get("x"), args.get("y")
+                if not isinstance(x, int) or not isinstance(y, int):
+                    raise ValueError("walk_to needs whole-number x and y")
+                result = adapter.walk_to(self, x, y)
             case "advance_text":
                 result = adapter.advance_text(self)
                 return f"{result['outcome']} after {result['presses']} A press(es)"
@@ -325,9 +389,11 @@ class Runner:
                 f"The user rejected the completion claim ({data['claim']}): {data['why'] or 'no reason given'}",
                 "",
             ]
+        for rolled_back in self.memory.events("capability_rollback", after=last_start):
+            lines += [rolled_back["data"]["note"], ""]
         lines += [
-            f"This is session {number}. You have {self.budget} game actions (press, walk, walk_to, advance_text);"
-            " get_state, notes and knowledge tools are free.",
+            f"This is session {number}. You have {self.budget} game actions (press, walk, walk_to, advance_text,"
+            " run_macro); every other tool is free.",
             f"Last session's summary: {progress.get('summary') or 'none, this is the first session.'}",
             f"Planned focus: {progress.get('next_focus') or 'none'}",
             "",
@@ -337,6 +403,9 @@ class Runner:
         if hits := self.memory.search(f"{self.game.location()} {progress.get('next_focus') or ''}", KNOWLEDGE_HITS):
             lines += ["", "Knowledge that may bear on this (knowledge_search finds more):"]
             lines += [describe_knowledge(entry) for entry in hits]
+        if found := self.game.registry.active():
+            lines += ["", "Your observations and macros:"]
+            lines += [capabilities.summary(self.game.registry, c) for c in found]
         return "\n".join([*lines, "", "Current game state:", self.game.state_text()])
 
     def _checks(self, observations: dict) -> list[str]:
@@ -558,7 +627,7 @@ def play(
 
             viewer = Viewer()
         start = partial(Emulator, core_path(meta["core"]), rom, options=meta["core_options"])
-        game = Game(start(), adapter, speed, viewer, start)
+        game = Game(start(), adapter, speed, viewer, start, Registry(memory))
         try:
             if state := latest_state(run_dir):
                 game.load_state(state)

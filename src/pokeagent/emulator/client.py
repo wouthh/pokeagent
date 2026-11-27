@@ -15,7 +15,11 @@ from pokeagent.emulator.worker import MAX_BLOB, MAX_LINE
 
 
 class EmulatorError(RuntimeError):
-    """The worker refused a request, broke the protocol, timed out or died."""
+    """The worker refused a request (RequestRefused), broke the protocol, timed out or died."""
+
+
+class RequestRefused(EmulatorError, ValueError):
+    """The worker is fine but refused the request (an unreadable address, unknown buttons, a bad state)."""
 
 
 class Emulator:
@@ -117,7 +121,7 @@ class Emulator:
             raise EmulatorError("emulator reply exceeds the size cap")
         data = self._read_until(lambda: n if len(self._buf) >= n else 0, MAX_BLOB, deadline) if n else b""
         if not head.get("ok"):
-            raise EmulatorError(head.get("error", "unknown worker error"))
+            raise RequestRefused(head.get("error", "unknown worker error"))
         return head, data
 
     def _read_until(self, ready, cap: int, deadline: float) -> bytes:

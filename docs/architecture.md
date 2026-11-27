@@ -102,7 +102,7 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
   (full text, whole-map ASCII, 3x screenshot; free), the actions `press`, `walk`, `walk_to` and `advance_text`
   (budget 100 per session; results report what changed, the screen text and a 9x9 map crop, with a screenshot
   only when the screen mode changed), `notes_read`/`notes_write` (8 KB), `end_session(summary, next_focus)` and
-  `report_harness_issue`.
+  `report_harness_issue`, plus the knowledge, objective and capability tools described below.
 - **`play.py`:** `Game` serialises every emulator call under one lock and is what the adapter drives, so it can
   pace emulation and feed the viewer. `Runner` runs one session at a time with a brief (objective, check, budget,
   last summary and focus, notes, current state):
@@ -213,15 +213,35 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
   - the next brief says when the checkpoint was saved, how many actions were undone, which entries went stale and
     which note lines were dropped.
 
-## Capabilities *(planned)*
+## Capabilities *(declarative implemented, phase 6a; code extensions planned)*
 
 - **Builtin:** `get_state`, `press`, `walk_to(x, y)` (whole-map grid), `walk`, `advance_text` (stops at prompts).
-- **Declarative:** RAM observations and macros, definable during play and usable in the same session.
+- **Declarative** (`capabilities.py`): plain data that trusted code validates and interprets; no agent code runs.
+  - *Observation:* a name, a description, an address, a length (1-64) and a decode (`u8`, `u16le`, `u16be`, `bcd`,
+    `bit` with a bit number, `popcount`, `bytes` or `text`). `define_observation` reads it once (and refuses it
+    when the optional `expect`, such as `{"op": "==", "value": 5}`, fails), then `get_state`, action results' state
+    text and the brief show it when `show` is set. Reads go through the worker's RAM-only `read`, so ROM and
+    unmapped addresses are refused like `mem_read`'s.
+  - *Macro:* up to 20 steps over `press`, `walk`, `walk_to`, `advance_text` and other macros, each with optional
+    `repeat`, or `until`/`while` (conditions in the success-check grammar over builtin and agent observations) with
+    a required `max`. `params` is a JSON schema for `run_macro`'s args, referenced in steps as `{"$arg": "x"}`.
+    Steps and conditions are checked when the macro is defined; it is not run then.
+  - *Calls:* `run_macro` is one action of the session budget; inside it a call runs at most 200 builtin actions and
+    4 nested macros. Arguments that do not match `params` are refused and not counted; a step's error or an `until`
+    that never held fails the call, which still reports the state it left behind.
+  - *Versions and scope:* every definition is a new immutable version (`capabilities` table, triggers) scoped to
+    the ROM (`rom:<sha1>`) or the family (`family:pokemon-gen1`); later runs on that ROM or family see the active
+    version, a ROM one hiding a family one of the same name. Capabilities are durable: a restore keeps them.
+  - *Rollback:* every call is a `capability_call` event; 3 failures in a version's last 10 calls retire it and
+    reactivate the version before it (or none). `pokeagent capability rollback RUN NAME` does the same by hand. The
+    next brief says what was rolled back and lists the active capabilities with their calls and failures.
+  - *Free tools:* `mem_read(address, length)` (hex, RAM only), `define_observation`, `define_macro` and
+    `list_capabilities`.
 - **Code extensions:** written in develop mode against a small `ctx` API, executed in the sandbox, activated at
   session boundaries.
-- Validation is owned by the orchestrator: schemas, contracts (preconditions, postconditions, invariants, declared
-  effects), a shared execution budget across nested calls, and runs on several game states. Contract violations,
-  exceptions and timeouts count as runtime failures and roll a capability back automatically.
+- Validation of code extensions is owned by the orchestrator: schemas, contracts (preconditions, postconditions,
+  invariants, declared effects), a shared execution budget across nested calls, and runs on several game states.
+  Contract violations, exceptions and timeouts count as runtime failures and roll a capability back automatically.
 
 ## Verified facts
 
@@ -376,3 +396,11 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
 - **2026-11-27: Restores go back only along the current timeline's history.** Restoring into an abandoned branch
   would need to bring back progress knowledge that an earlier restore made stale; it is not needed by the stuck
   ladder, which restores the last checkpoint that made progress.
+- **2026-11-27: Declarative macros are checked statically, not dry-run, when defined.** Their effect depends on the
+  state they run in, so a dry run on a copy of the current state would mostly repeat the first real call. Calls are
+  bounded (200 actions, 4 nested macros, a `max` on every loop) and a version that keeps failing in play is rolled
+  back. Code extensions will still be validated on several states in the isolated worker (phase 6b).
+- **2026-11-27: Success checks accept only the adapter's builtin observations,** not agent-defined ones, so an
+  observation the agent wrote cannot decide that its own objective is met.
+- **2026-11-27: A refused emulator request is a `RequestRefused` (a `ValueError`),** not a dead worker, so a bad
+  address from `mem_read` or an observation is a tool error and never triggers an emulator restart.

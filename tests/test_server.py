@@ -9,7 +9,8 @@ from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from PIL import Image
 
-from pokeagent.emulator.client import EmulatorError
+from pokeagent.capabilities import Registry, check_args
+from pokeagent.emulator.client import EmulatorError, RequestRefused
 from pokeagent.memory import Memory
 from pokeagent.server import NOTES_LIMIT, GameServer
 
@@ -32,12 +33,28 @@ class FakeGame:
     def observations(self):
         return {"map_id": 1, "badges": 0, "in_game": True}
 
+    def try_observation(self, spec):
+        return 7
+
+    def peek(self, address, length):
+        if address < 0x8000:
+            raise RequestRefused(f"address {address:#06x} is not readable RAM")
+        return bytes(range(length))
+
+    def run_macro(self, name, args):
+        macro = self.registry.get(name, "macro")
+        check_args(macro["spec"], args)
+        error = "stuck" if args.get("stuck") else None
+        return f"run_macro {name}: {'failed: stuck' if error else 'done'}", None, macro, error
+
 
 @pytest.fixture
 def server(tmp_path):
     memory = Memory(tmp_path / "memory.db", "run-1")
     memory.open_run({"objective": "catch a Pikachu", "rom_sha1": "red", "family": "pokemon-gen1"})
-    s = GameServer(FakeGame(), memory, tmp_path / "notes.md", tmp_path / "issues.md")
+    game = FakeGame()
+    game.registry = Registry(memory)
+    s = GameServer(game, memory, tmp_path / "notes.md", tmp_path / "issues.md")
     url = s.start()
     yield s, url
     s.stop()
@@ -148,3 +165,36 @@ def test_a_failed_emulator_is_restarted_while_restarts_remain(server):
     assert s.memory.events("action")[-1]["data"]["args"] == {"button": "a", "times": 1}  # no event for the crash
     assert "end the session" in text(call(url, token, "press", {"button": "crash"}))
     assert s.broken and "emulator has stopped" in text(call(url, token, "get_state"))
+
+
+def test_capability_tools(server):
+    s, url = server
+    session = s.open_session(1, budget=10)
+
+    def use(tool, **args):
+        return call(url, session.token, tool, args)
+
+    hp = {"name": "hp", "description": "lead HP", "address": 0xD16C}
+    assert "reads 7 now" in text(use("define_observation", **hp, expect={"op": "==", "value": 7}))
+    refused = use("define_observation", **hp | {"name": "hp_high"}, expect={"op": ">", "value": 7})
+    assert refused.is_error and "reads 7 now, which fails" in text(refused)
+    assert use("define_observation", **hp | {"name": "map_id"}).is_error  # a builtin name
+    assert text(use("mem_read", address=0xD16C, length=3)) == "0xd16c: 00 01 02"
+    assert "not readable RAM" in text(use("mem_read", address=0x0100))  # a refused read, not a broken emulator
+    assert s.broken is None
+
+    steps = [{"do": "walk", "args": {"direction": "up"}, "until": {"obs": "hp", "op": "<", "value": 3}, "max": 5}]
+    params = {"type": "object", "properties": {"stuck": {"type": "boolean"}}}
+    defined = use("define_macro", name="climb", description="walk up", steps=steps, params=params)
+    assert "climb version 1" in text(defined)
+    assert use("define_macro", name="hp", description="x", steps=steps).is_error  # an observation's name
+    assert use("define_macro", name="up", description="x", steps=[{"do": "fly"}]).is_error
+    assert text(use("run_macro", name="climb")) == "[event 3] run_macro climb: done"  # after two definitions
+    assert "do not match" in text(use("run_macro", name="climb", args={"stuck": "yes"}))  # refused, not counted
+    assert "rolled back" not in text(use("run_macro", name="climb", args={"stuck": True}))
+    assert "rolled back" not in text(use("run_macro", name="climb", args={"stuck": True}))
+    third = text(use("run_macro", name="climb", args={"stuck": True}))
+    assert "climb version 1 was rolled back (3 of its last 10 calls failed); no earlier version exists" in third
+    assert "no active macro" in text(use("run_macro", name="climb"))
+    assert text(use("list_capabilities")).startswith("hp (observation v1, rom; 1 byte(s) at 0xd16c as u8)")
+    assert session.actions == 6  # every run_macro call is one action

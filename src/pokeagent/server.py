@@ -22,7 +22,7 @@ from mcp.server.mcpserver import Context, Image, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 
-from pokeagent import objectives
+from pokeagent import capabilities, objectives
 from pokeagent.emulator.client import EmulatorError
 from pokeagent.memory import Memory, describe_knowledge
 
@@ -44,7 +44,8 @@ class Session:
 
 class GameServer:
     """Owns the sessions and the tools. `game` provides `full_state()` and `act(name, **args)`, both returning
-    (text, png bytes or None), and `observations()`."""
+    (text, png bytes or None), `observations()` (the builtin ones), `registry` (the agent's capabilities),
+    `run_macro(name, args)`, `try_observation(spec)` and `peek(address, length)`."""
 
     def __init__(self, game, memory: Memory, notes: Path, harness_issues: Path):
         self.game, self.memory, self.notes, self.harness_issues = game, memory, notes, harness_issues
@@ -124,14 +125,14 @@ class GameServer:
                 self.broken = str(e)
                 raise ToolError(f"the emulator has stopped ({e}); end the session") from e
 
-        async def act(ctx: Context, name: str, **args):
+        async def act(ctx: Context, name: str, call=None, **args):
             session = self._session(ctx)
             if session.ended:
                 raise ToolError("this session has ended; stop now")
             if session.actions >= session.budget:
                 raise ToolError(f"the action budget ({session.budget}) is used up: update your notes, then end_session")
             session.actions += 1
-            text, png = await on_game(partial(self.game.act, name, **args))
+            text, png = await on_game(call or partial(self.game.act, name, **args))
             if self.after_action:  # an action whose recovery state was not saved is undone by a restart: no event
                 await on_game(self.after_action)
             outcome = {"name": name, "args": args, "outcome": text.split("\n", 1)[0]}
@@ -241,6 +242,95 @@ class GameServer:
             self._session(ctx)
             remember(self.memory.set_knowledge_status, entry, status, evidence, superseded_by)
             return "updated"
+
+        async def taken(kind: str) -> set[str]:
+            """Names a new capability of `kind` may not take: the builtin ones and the other kind's."""
+            builtin = set(await on_game(self.game.observations)) | set(capabilities.ACTIONS) | {"run_macro"}
+            return builtin | {c["name"] for c in self.game.registry.active() if c["kind"] != kind}
+
+        @tool
+        async def mem_read(address: int, ctx: Context, length: int = 1) -> str:
+            """Read `length` (1-64) bytes of the game's memory from `address`, as hex: work RAM C000-DFFF, high RAM
+            FF80-FFFE, cartridge RAM A000-BFFF and the other RAM regions, never ROM. Read-only and free."""
+            self._session(ctx)
+            if not 1 <= length <= capabilities.MAX_READ:
+                raise ToolError(f"length must be 1..{capabilities.MAX_READ}")
+            data = await on_game(partial(self.game.peek, address, length))
+            return f"{address:#06x}: {data.hex(' ')}"
+
+        @tool
+        async def define_observation(
+            name: str,
+            description: str,
+            address: int,
+            ctx: Context,
+            length: int = 1,
+            decode: str = "u8",
+            bit: int | None = None,
+            show: bool = True,
+            scope: str = "rom",
+            expect: dict | None = None,
+        ) -> str:
+            """Define (or redefine, as a new version) a named value read from RAM, kept for this run and later runs on
+            this ROM (scope rom) or game family (scope family). decode: u8, u16le, u16be, bcd, bit (with `bit` 0-7),
+            popcount, bytes or text. Shown in get_state when `show`, and usable in macro conditions. `expect`, such as
+            {"op": "==", "value": 5}, must hold for the value read now, or the definition is refused. Free."""
+            session = self._session(ctx)
+            spec = {"name": name, "description": description, "address": address, "length": length}
+            spec |= {"decode": decode, "show": show} | ({} if bit is None else {"bit": bit})
+            spec = remember(capabilities.check_observation, spec, await taken("observation"))
+            value = await on_game(partial(self.game.try_observation, spec))
+            if expect is not None:
+                condition = {"obs": name, **expect} if isinstance(expect, dict) else expect
+                remember(objectives.validate, condition, [name])
+                if not objectives.holds(condition, {name: value}):
+                    raise ToolError(
+                        f"not defined: {name} reads {value!r} now, which fails {objectives.describe(condition)}"
+                    )
+            found = remember(self.game.registry.define, "observation", spec, scope, session.number)
+            return f"defined {name} version {found['version']}; it reads {value!r} now"
+
+        @tool
+        async def define_macro(
+            name: str, description: str, steps: list, ctx: Context, params: dict | None = None, scope: str = "rom"
+        ) -> str:
+            """Define (or redefine, as a new version) a named sequence of actions, kept like observations. Each step is
+            {"do": "press" | "walk" | "walk_to" | "advance_text" | "macro", "args": {...}} with the action's own
+            arguments (a macro step: {"name": ..., "args": {...}}), plus optionally "repeat": n, or "until" / "while":
+            condition with "max": n. Conditions use the grammar of propose_success_check over builtin observations and
+            yours. `params` is a JSON schema for run_macro's args; {"$arg": "x"} in a step's args stands for arg x.
+            A call runs at most 200 actions and 4 nested macros. Free; it is not run now."""
+            session = self._session(ctx)
+            spec = {"name": name, "description": description, "steps": steps} | ({"params": params} if params else {})
+            macros = {c["name"] for c in self.game.registry.active("macro")} | {name}
+            names = set(await on_game(self.game.observations)) | {
+                c["name"] for c in self.game.registry.active("observation")
+            }
+            spec = remember(capabilities.check_macro, spec, names, macros, await taken("macro"))
+            found = remember(self.game.registry.define, "macro", spec, scope, session.number)
+            return f"defined {name} version {found['version']}; run it with run_macro"
+
+        @tool
+        async def run_macro(name: str, ctx: Context, args: dict | None = None) -> list | str:
+            """Run one of your macros with `args`. One action, however many actions the macro takes. A macro that
+            fails part way stops there and reports why; a version that keeps failing is rolled back."""
+            ran = {}
+
+            def call():
+                text, png, ran["macro"], ran["error"] = self.game.run_macro(name, args or {})
+                return text, png
+
+            reply = await act(ctx, "run_macro", call, macro=name, args=args or {})
+            if ran and (note := self.game.registry.record(ran["macro"], ran["error"], self._session(ctx).number)):
+                return [*reply, note] if isinstance(reply, list) else f"{reply}\n{note}"
+            return reply
+
+        @tool
+        def list_capabilities(ctx: Context) -> str:
+            """Your observations and macros (this ROM's and this game family's), with their use so far."""
+            self._session(ctx)
+            found = self.game.registry.active()
+            return "\n".join(capabilities.summary(self.game.registry, c) for c in found) or "none defined yet"
 
         @tool
         async def propose_success_check(condition: dict, reason: str, ctx: Context) -> str:

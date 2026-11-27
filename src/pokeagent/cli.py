@@ -44,6 +44,11 @@ def build_parser() -> argparse.ArgumentParser:
     restore.add_argument("run", help="run id or run folder")
     restore.add_argument("checkpoint", nargs="?", help="checkpoint file name (omit to list them)")
     restore.add_argument("--data-dir", type=Path, help="where runs live (default ~/.local/share/pokeagent)")
+    capability = commands.add_parser("capability", help="list the observations and macros a run sees, or roll one back")
+    capability.add_argument("action", choices=["list", "rollback"])
+    capability.add_argument("run", help="run id or run folder")
+    capability.add_argument("name", nargs="?", help="for rollback: the capability to take back to its previous version")
+    capability.add_argument("--data-dir", type=Path, help="where runs live (default ~/.local/share/pokeagent)")
     hook = commands.add_parser("hook", help="hooks called by Claude sessions (internal)")
     hook.add_argument("kind", choices=["web"])
     hook.add_argument("--log", type=Path, required=True)
@@ -104,6 +109,24 @@ def main(argv: list[str] | None = None) -> int:
                         print(
                             f"{event['data']['file']}  {saved}  timeline {event['timeline']}  {event['data']['reason']}"
                         )
+        except (OSError, ValueError) as e:
+            print(f"pokeagent: {e}", file=sys.stderr)
+            return 1
+    elif args.command == "capability":
+        from pokeagent import capabilities, play
+
+        try:
+            run_dir, data_dir = find_run(args.run, args.data_dir)
+            with contextlib.closing(play.open_memory(run_dir, data_dir)) as memory:
+                registry = capabilities.Registry(memory)
+                if args.action == "list":
+                    for found in registry.active():
+                        print(capabilities.summary(registry, found))
+                else:
+                    found = next((c for c in registry.active() if c["name"] == args.name), None)
+                    if found is None:
+                        raise ValueError(f"no active capability named {args.name!r}; see `pokeagent capability list`")
+                    print(registry.rollback(found, "by the user"))
         except (OSError, ValueError) as e:
             print(f"pokeagent: {e}", file=sys.stderr)
             return 1

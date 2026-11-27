@@ -8,9 +8,10 @@ import pytest
 from pokeagent import objectives
 from pokeagent import play as play_module
 from pokeagent.agents.claude_cli import ProviderError, SessionResult
+from pokeagent.capabilities import Registry, check_macro, check_observation
 from pokeagent.emulator.client import Emulator, EmulatorError
 from pokeagent.emulator.cores import core_path
-from pokeagent.games.pokemon_gen1 import CORE, CORE_OPTIONS, DEFAULT_CHECK, HALL_OF_FAME
+from pokeagent.games.pokemon_gen1 import CORE, CORE_OPTIONS, DEFAULT_CHECK, HALL_OF_FAME, OBSERVATIONS
 from pokeagent.memory import Memory
 from pokeagent.play import Game, Runner, latest_state, new_run, play, restorable, restore, run_lock
 from pokeagent.server import GameServer
@@ -53,6 +54,7 @@ def make_runner(tmp_path, results, objective=None, map_id=0, in_game=True):
     game = FakeGame(map_id, in_game)
     memory = Memory(tmp_path / "memory.db", "run")
     memory.open_run(meta)
+    game.registry = Registry(memory)
     server = GameServer(game, memory, run_dir / "notes.md", tmp_path / "issues.md")
     briefs, sleeps, queue = [], [], iter(results)
 
@@ -117,6 +119,13 @@ def test_the_brief_carries_knowledge_and_a_generated_summary(tmp_path):
         session = runner.server.sessions[spec.token]
         session.actions = 2
         memory.event("action", {"outcome": "walk: blocked after 0 step(s)"}, session.number)
+        if session.number == 1:
+            spec_ = check_macro(
+                {"name": "spin", "description": "turn around", "steps": [{"do": "walk"}]}, set(), set(), set()
+            )
+            registry = runner.game.registry
+            registry.define("macro", spec_, "rom", 1)
+            registry.rollback(registry.define("macro", spec_, "rom", 1), "it kept failing", 1)
         return replay(spec, on_event)
 
     runner.provider = acting
@@ -124,6 +133,8 @@ def test_the_brief_carries_knowledge_and_a_generated_summary(tmp_path):
     assert "#1 [map, hypothesis, rom] Pallet Town: Oak stops you" in briefs[0]
     assert "(no summary: session 1 ended with completed after 2 actions" in briefs[1]
     assert "walk: blocked after 0 step(s)" in briefs[1]
+    assert "spin version 2 was rolled back (it kept failing); version 1 is active again" in briefs[1]
+    assert "spin (macro v1, rom; no params; unused): turn around" in briefs[1]
     assert [e["data"]["actions"] for e in memory.events("session_end")] == [2, 2]
 
 
@@ -187,6 +198,54 @@ def test_game_actions_on_the_rom(game):
     assert text.startswith("walk_to: map_changed") and "Reds House 1F" in text and png is None
     with pytest.raises(ValueError, match="button must be"):
         live.act("press", button="turbo", times=1)
+
+
+def test_observations_and_macros_on_the_rom(game, tmp_path):
+    gen1, emu, bedroom = game
+    emu.load_state(bedroom)
+    memory = Memory(tmp_path / "memory.db", "run")
+    memory.open_run({"objective": "x", "rom_sha1": "red", "family": "pokemon-gen1"})
+    live = Game(emu, gen1, registry=Registry(memory))
+    x = live.observations()["x"]
+    spec = check_observation(
+        {"name": "my_x", "description": "the player's x", "address": 0xD362, "decode": "u8"}, set(OBSERVATIONS)
+    )
+    assert live.try_observation(spec) == x
+    live.registry.define("observation", spec, "rom", 1)
+    assert f"Your observations: my_x={x}" in live.full_state()[0] and f"my_x={x}" in live.state_text()
+
+    def define(name, steps):
+        live.registry.define(
+            "macro",
+            check_macro({"name": name, "description": name, "steps": steps}, {"my_x", "map_id"}, set(), set()),
+            "rom",
+            1,
+        )
+
+    define(
+        "two_right",
+        [
+            {
+                "do": "walk",
+                "args": {"direction": "right"},
+                "until": {"obs": "my_x", "op": "==", "value": x + 2},
+                "max": 4,
+            }
+        ],
+    )
+    text, _, _, error = live.run_macro("two_right", {})
+    assert (
+        error is None
+        and text.startswith("run_macro two_right: done after 2 action(s)")
+        and live.observations()["x"] == x + 2
+    )
+    define(
+        "nowhere",
+        [{"do": "press", "args": {"button": "b"}, "until": {"obs": "map_id", "op": "==", "value": 200}, "max": 2}],
+    )
+    text, _, macro, error = live.run_macro("nowhere", {})
+    assert "until did not hold after 2 times" in error and text.startswith("run_macro nowhere: failed:")
+    assert "Now: Reds House 2F" in text and macro["name"] == "nowhere"
 
 
 def test_a_relative_run_dir_becomes_absolute(tmp_path, monkeypatch):
