@@ -98,8 +98,9 @@ def test_stalled_worker_times_out_while_writing():
     import subprocess
     import time
 
-    e = Emulator(core_path("sameboy"), FIXTURES / "dmg-acid2.gb", timeout=0.5)
+    e = Emulator(core_path("sameboy"), FIXTURES / "dmg-acid2.gb")  # a short timeout could fail startup under load
     e.close()
+    e.timeout = 0.5
     e._proc = subprocess.Popen(["sleep", "30"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, start_new_session=True)
     t = time.monotonic()
     with pytest.raises(EmulatorError, match="did not accept"):
