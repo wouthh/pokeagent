@@ -21,7 +21,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from pokeagent import capabilities, develop, extensions, objectives
+from pokeagent import capabilities, develop, extensions, objectives, stuck
 from pokeagent.agents.claude_cli import ProviderError, SessionResult, SessionSpec, preflight, run_session
 from pokeagent.capabilities import Registry
 from pokeagent.emulator.client import Emulator, EmulatorError
@@ -140,6 +140,11 @@ class Game:
             self.emu = self.start()
             if state:
                 self.emu.load_state(state)
+
+    def progress_state(self) -> dict:
+        """The adapter's full state dict, for milestones and the stuck ladder."""
+        with self.lock:
+            return self.adapter.state(self)
 
     def state_text(self) -> str:
         with self.lock:
@@ -355,6 +360,10 @@ class Runner:
         self.memory: Memory = server.memory
         self._actions = self.restarts = 0
         self._after_lock = threading.Lock()  # a save and its write stay together, and a restart waits for them
+        self.ladder = stuck.Ladder(game.adapter)
+        self._climbed = 0  # the highest ladder level reached in the current session
+        self._maps, self._seen = self._visited_maps(), None  # milestone state; _seen: badges and Pokédex count
+        self.number: int | None = None  # the current session
         server.after_action, server.recover = self._after_action, self.recover
         (run_dir / "sessions").mkdir(exist_ok=True)
         (run_dir / "checkpoints").mkdir(exist_ok=True)
@@ -387,10 +396,13 @@ class Runner:
             for name in CONTEXT_FILES:
                 old.with_suffix(f".{name}").unlink(missing_ok=True)
         identity = {key: self.meta[key] for key in IDENTITY}
-        self.memory.event("checkpoint", {"file": path.name, "reason": reason} | identity)
+        data = {"file": path.name, "reason": reason, "best": self.ladder.best} | identity  # best: the ladder's
+        self.memory.event("checkpoint", data)
         self.log("checkpoint", f"{path.name} ({reason})")
 
-    def _after_action(self) -> None:
+    def _after_action(self) -> tuple[int, str]:
+        """After every completed action: the recovery state, milestones, the stuck ladder and periodic checkpoints.
+        Returns the level the ladder climbed to (or 0) and the notice for the agent."""
         with self._after_lock:
             state = self.game.save_state()  # one emulator save: a second one could fail after the action is committed
             try:
@@ -400,8 +412,68 @@ class Runner:
             except OSError as e:  # the emulator is ahead of the file: report it as failed so it restarts from the file
                 raise EmulatorError(f"the recovery state could not be written: {e}") from e
             self._actions += 1
+            watched = self._watch(state)
             if self._actions % CHECKPOINT_EVERY == 0:
                 self.checkpoint(f"{self._actions} actions", state)
+            return watched
+
+    def _watch(self, saved: bytes) -> tuple[int, str]:
+        state = self.game.progress_state()
+        if not state["in_game"]:
+            return 0, ""
+        self._milestones(state, saved)
+        climbed = self.ladder.observe(state, len(self._maps))
+        if not climbed:
+            return 0, ""
+        self._climbed = max(self._climbed, climbed)
+        self.memory.event("stuck", {"level": climbed, "since": self.ladder.since}, self.number)
+        self.log("stuck", f"level {climbed} after {self.ladder.since} actions without progress")
+        notice = stuck.describe(climbed, self.ladder.since)
+        if hits := self.memory.search(state["map"], 3):
+            notice += "\nKnowledge that may bear on this:\n" + "\n".join(describe_knowledge(e) for e in hits)
+        return climbed, notice
+
+    def _milestones(self, state: dict, saved: bytes) -> None:
+        """Record first visits to maps, new badges and new Pokédex entries as milestone events of the timeline."""
+        found = []
+        if state["map_id"] not in self._maps:
+            self._maps.add(state["map_id"])
+            found.append({"kind": "map", "map_id": state["map_id"], "text": f"first visit to {state['map']}"})
+        seen = {"badges": state["badges"], "dex_owned": state["dex_owned"]}
+        if self._seen is not None:  # the first state after a start or restore is the baseline
+            if seen["badges"] > self._seen["badges"]:
+                found.append({"kind": "badge", "badges": seen["badges"], "text": f"badge {seen['badges']}"})
+            if seen["dex_owned"] > self._seen["dex_owned"]:
+                found.append(
+                    {"kind": "species", "owned": seen["dex_owned"], "text": f"{seen['dex_owned']} species owned"}
+                )
+        self._seen = seen
+        for milestone in found:
+            self.memory.event("milestone", milestone, self.number)
+            self.log("milestone", milestone["text"])
+        if any(m["kind"] == "badge" for m in found):
+            self.checkpoint(f"badge {seen['badges']}", saved)
+
+    def _visited_maps(self) -> set[int]:
+        history = self.memory.history()
+        return {
+            e["data"]["map_id"]
+            for e in self.memory.events("milestone", limit=-1)
+            if e["data"]["kind"] == "map" and e["created"] <= history.get(e["timeline"], -1)
+        }
+
+    def _restore_progress(self) -> bool:
+        """Stuck level 4: go back to the first checkpoint saved after the last progress; False when there is none."""
+        target = next(
+            (e for e in restorable(self.run_dir, self.memory) if e["data"].get("best") == self.ladder.best), None
+        )
+        if target is None:
+            return False
+        data = restore(self.run_dir, self.memory, target["data"]["file"])
+        self.game.load_state((self.run_dir / "recovery.state").read_bytes())
+        self._maps, self._seen = self._visited_maps(), None
+        self.log("restore", f"{data['file']} (stuck level 4): {data['undone_actions']} actions undone")
+        return True
 
     def recover(self, error: str) -> bool:
         """Restart a failed emulator at the state after the last completed action; False once restarts run out."""
@@ -446,6 +518,18 @@ class Runner:
             lines += [
                 line for event in self.memory.events(kind, after=last_start) for line in (event["data"]["note"], "")
             ]
+        history = self.memory.history()
+        reached = [
+            e for e in self.memory.events("milestone", limit=-1) if e["created"] <= history.get(e["timeline"], -1)
+        ]
+        if reached:
+            lines += [
+                "Recent milestones: "
+                + "; ".join(f"{e['data']['text']} (session {e['session']})" for e in reached[-5:]),
+                "",
+            ]
+        if self.ladder.level:
+            lines += [stuck.brief(self.ladder.level, self.ladder.since), ""]
         lines += [
             f"This is session {number}. You have {self.budget} game actions (press, walk, walk_to, advance_text,"
             " run_macro, run_tool); every other tool is free.",
@@ -527,6 +611,7 @@ class Runner:
                 for note in self.game.registry.activate_staged(number):
                     self.log("activate", note)
             session = self.server.open_session(number, self.budget)
+            self.number = number
             spec = SessionSpec(
                 brief=self.brief(number, progress),
                 system_prompt_file=PROMPTS / "play.md",
@@ -580,11 +665,18 @@ class Runner:
                 self.sleep(30 * failures)
             else:
                 failures = 0
+            climbed, self._climbed = self._climbed, 0
+            if climbed == 4 and self._restore_progress():
+                progress = json.loads(progress_file.read_text())
+            elif climbed >= 4:
+                self.log("stuck", f"the run pauses after {self.ladder.since} actions without progress")
+                return "stuck"
             pending = session.request
 
     def _wait_for_reset(self, result: SessionResult) -> None:
         wait = max(60.0, result.resets_at - time.time()) if result.resets_at else 900.0
         self.log("limit", f"waiting {wait / 60:.0f} min for the usage limit to reset")
+        self.memory.event("limit_wait", {"seconds": wait})  # stats leave it out of elapsed time
         self.sleep(wait)
 
     def _develop(self, request_id: int, progress: dict) -> int:
@@ -683,6 +775,11 @@ def restore(run_dir: Path, memory: Memory, name: str) -> dict:
         for e in memory.events("action", after=target["id"], limit=-1)
         if e["created"] <= history.get(e["timeline"], -1)
     )
+    reverted = [
+        e["data"]["text"]
+        for e in memory.events("milestone", after=target["id"], limit=-1)
+        if e["created"] <= history.get(e["timeline"], -1)
+    ]
     # Read and write every file before the timeline changes, so a failure (disk full) leaves the run as it was.
     saved_notes = path.with_suffix(".notes.md")
     new_notes = saved_notes.read_text() if saved_notes.exists() else ""
@@ -714,6 +811,7 @@ def restore(run_dir: Path, memory: Memory, name: str) -> dict:
         "reason": target["data"]["reason"],
         "saved": time.strftime("%Y-%m-%d %H:%M", time.localtime(target["created"])),
         "undone_actions": undone,
+        "reverted_milestones": reverted,
         "stale": stale,
         "dropped_notes": [line for line in old_notes.splitlines() if line.strip() and line not in kept][:40],
     }
@@ -737,6 +835,8 @@ def restore_notice(data: dict) -> str:
         " later actions were undone, so the game is back where it was then. Your notes and planned focus are the"
         " ones saved with it.",
     ]
+    if data.get("reverted_milestones"):
+        lines.append(f"Milestones reached after it are undone: {'; '.join(data['reverted_milestones'])}.")
     if data["stale"]:
         lines.append(f"Progress knowledge recorded after it is now stale: {', '.join(f'#{i}' for i in data['stale'])}.")
     if data["dropped_notes"]:

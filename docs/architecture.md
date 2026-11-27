@@ -120,6 +120,26 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
 - **Prompt:** `prompts/play.md` explains the tools, the budget, what persists and the rules (controller input
   only; web content is unverified). It names no capability to build.
 
+## Milestones and the stuck ladder *(implemented, phase 7b)*
+
+- **Milestones** are `milestone` events, so they belong to the timeline they happened on: the first visit to a map
+  (on the current timeline's history), a new badge and a new Pokédex entry, read from the game state after every
+  completed action. A new badge also takes a checkpoint. The brief lists the last five, and a restore lists the
+  ones it undid.
+- **Progress** is `progress_score` rising above its best: badges, maps visited on this timeline, Pokédex entries,
+  levels, experience and tiles visited (since the runner started). Grinding on the same tiles is progress; pacing
+  them or bumping into a wall is not.
+- **The ladder** (`stuck.py`, held by the runner): every 40 completed actions without progress climb a level, and a
+  climb adds a notice (with knowledge hits for the current map) to that action's result and a `stuck` event:
+  1. the notice only;
+  2. the action tools refuse until `reflect(analysis, plan)` (a free play tool, recorded as a `reflection` event);
+  3. the session ends, and the next brief says how long the agent has been stuck and what comes next;
+  4. the session ends and the runner restores the first checkpoint saved after the last progress (checkpoint
+     events record the ladder's best score) on a new timeline; with no such checkpoint it goes to level 5;
+  5. the session ends and the run stops with `stuck`; `resume` continues it.
+
+  Progress resets the ladder. It is not saved, so a resumed run starts it over.
+
 ## Isolation and permissions *(sandbox, Claude provider and web hook implemented; the rest planned)*
 
 - `sandbox.ensure()` runs the probe once per process and raises `SandboxError` unless all of these hold:
@@ -490,6 +510,12 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
   controller tools cannot be pointed at the live game. The two lists share one server object and its memory.
 - **2026-11-27: Development attempts are counted per tool name,** the request's only stable key; a second request
   for the same tool continues its workspace. A cycle cut short by a usage limit or an error still counts.
+- **2026-11-27: The stuck ladder climbs every 40 actions without progress.** Shopping, healing and long dialogs
+  take tens of actions without progress, so 40 leaves room for them before the first notice, and the pause comes
+  after 200 actions (two sessions). Live runs will tune it.
+- **2026-11-27: The ladder's tile set and level live in the runner, not the run.** A resumed run starts the ladder
+  over, which also lets the user resume a run that paused as stuck. Maps visited come from milestone events, so they
+  follow the timeline.
 - **2026-11-27: A tool's manifest carries its validation `examples`.** The contract runs need arguments, and the
   author of the tool is the one who knows sensible ones; each is checked against `params` first.
 - **2026-11-27: Review fixes for tools.** A macro a tool calls spends the tool's shared budget action by action; a

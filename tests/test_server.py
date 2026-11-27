@@ -257,3 +257,20 @@ def test_request_development_cites_action_events_once_per_session(server):
     assert s.memory.events("development_requested")[0]["data"]["evidence"] == [action]
     again = call(url, session.token, "request_development", ask)
     assert again.is_error and f"already made request #{action + 1}" in text(again)
+
+
+def test_the_stuck_ladder_adds_notices_holds_actions_until_reflect_and_ends_the_session(server):
+    s, url = server
+    climbs = iter([(1, "notice one"), (0, ""), (2, "notice two"), (3, "notice three")])
+    s.after_action = lambda: next(climbs)
+    session = s.open_session(1, budget=10)
+    assert text(call(url, session.token, "press", {"button": "a"})).endswith("press done\n\nnotice one")
+    assert not text(call(url, session.token, "press", {"button": "a"})).endswith("notice one")
+    assert text(call(url, session.token, "press", {"button": "a"})).endswith("notice two")
+    held = call(url, session.token, "press", {"button": "a"})
+    assert held.is_error and "until you call reflect" in text(held) and session.actions == 3
+    assert call(url, session.token, "reflect", {"analysis": " ", "plan": "x"}).is_error
+    assert "Recorded as event" in text(call(url, session.token, "reflect", {"analysis": "loops", "plan": "go"}))
+    assert s.memory.events("reflection")[0]["data"] == {"analysis": "loops", "plan": "go"}
+    assert text(call(url, session.token, "press", {"button": "a"})).endswith("notice three") and session.ended
+    assert "ended" in text(call(url, session.token, "press", {"button": "a"}))

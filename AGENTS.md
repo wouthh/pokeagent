@@ -18,6 +18,8 @@ first use case, not an architectural constraint. Design and decisions: [docs/arc
   - `games/pokemon_gen1.py`: the Red/Blue adapter (state, screen modes, walk grid, macro actions, scoring).
   - `server.py`: the `game` MCP server (token and Host checks, tools, budgets). `play.py`: runs, the live `Game`,
     the session loop. `viewer.py`: the `--watch` window. `prompts/play.md`: the play-mode system prompt.
+  - `stuck.py`: the stuck ladder (progress from `progress_score`, the five levels and their notices); the runner
+    records milestones and acts on the levels.
   - `memory.py`: the SQLite store (runs, success checks, timelines, events, knowledge with FTS5) whose triggers
     keep objectives, checks and events immutable. `objectives.py`: the check grammar, judging and claims.
   - `capabilities.py`: the agent's declarative observations and macros (validation, interpreter, versioned

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from pokeagent import objectives
+from pokeagent import objectives, stuck
 from pokeagent import play as play_module
 from pokeagent.agents.claude_cli import ProviderError, SessionResult
 from pokeagent.capabilities import Registry, check_macro, check_observation
@@ -13,7 +13,7 @@ from pokeagent.develop import Bench
 from pokeagent.emulator.client import Emulator, EmulatorError
 from pokeagent.emulator.cores import core_path
 from pokeagent.extensions import install
-from pokeagent.games.pokemon_gen1 import CORE, CORE_OPTIONS, DEFAULT_CHECK, HALL_OF_FAME, OBSERVATIONS
+from pokeagent.games.pokemon_gen1 import CORE, CORE_OPTIONS, DEFAULT_CHECK, HALL_OF_FAME, OBSERVATIONS, Gen1
 from pokeagent.memory import Memory
 from pokeagent.play import Game, Runner, latest_state, new_run, play, restorable, restore, run_lock
 from pokeagent.server import GameServer
@@ -21,8 +21,17 @@ from pokeagent.validation import validate
 
 
 class FakeGame:
+    adapter = Gen1  # for its progress score
+
     def state_text(self):
         return f"on map {self.map_id}"
+
+    def progress_state(self):
+        place = {"in_game": self.in_game, "map_id": self.map_id, "map": "Pallet Town", "x": self.x, "y": 0}
+        return place | {"badges": self.badges, "dex_owned": 0, "party": [{"level": 5, "exp": self.exp}]}
+
+    def load_state(self, state):
+        self.loaded = state
 
     def observations(self):
         return {"map_id": self.map_id, "in_game": self.in_game}
@@ -32,6 +41,7 @@ class FakeGame:
 
     def __init__(self, map_id=0, in_game=True):
         self.map_id, self.in_game, self.saves, self.restarts = map_id, in_game, 0, []
+        self.x = self.badges = self.exp = 0
 
     def save_state(self):
         self.saves += 1
@@ -236,6 +246,42 @@ def test_a_run_that_succeeded_during_play_skips_its_development_request(tmp_path
     assert runner.loop("http://127.0.0.1:1/mcp") == "complete" and len(briefs) == 1 and modes == ["play"]
 
 
+def test_milestones_and_a_stuck_run_that_restores_then_pauses(tmp_path):
+    runner, briefs, _ = make_runner(tmp_path, [(SessionResult("completed"), None)] * 3)
+    game, replay = runner.game, runner.provider
+    notices = []
+
+    def acting(spec, on_event):
+        session = runner.server.sessions[spec.token]
+        if session.number == 1:
+            game.map_id = 1  # a first visit
+            runner._after_action()
+            game.badges = 1
+            runner._after_action()
+        actions = 0
+        while not session.ended and actions < 4 * stuck.STEP:  # pacing between two tiles: no progress
+            game.x = 1 - game.x
+            climbed, notice = runner._after_action()
+            actions += 1
+            if notice:
+                notices.append(notice)
+            session.ended = climbed >= 3
+        return replay(spec, on_event)
+
+    runner.provider = acting
+    assert runner.loop("url") == "stuck"
+    milestones = [e["data"]["text"] for e in runner.memory.events("milestone", limit=-1)]
+    assert milestones[-2:] == ["first visit to Pallet Town", "badge 1"]
+    assert "badge 1" in [e["data"]["reason"] for e in runner.memory.events("checkpoint", limit=-1)]
+    assert [int(n.split("stuck level ")[1][0]) for n in notices] == [1, 2, 3, 4, 5]
+    assert "Recent milestones: first visit to Pallet Town (session 1); badge 1 (session 1)" in briefs[1]
+    assert "Stuck: no progress in your last 120 actions; the stuck ladder is at level 3 of 5" in briefs[1]
+    restored = runner.memory.events("restore")[0]["data"]
+    assert restored["undone_actions"] == 0 and game.loaded  # actions events come from the server, not this fake
+    assert "the stuck ladder is at level 4 of 5" in briefs[2] and "The game was restored" in briefs[2]
+    assert len(briefs) == 3
+
+
 def test_the_check_waits_for_a_game_in_progress(tmp_path):
     # Power-on RAM is noise: a map id that happens to equal the Hall of Fame must not complete the run.
     runner, briefs, _ = make_runner(tmp_path, [(SessionResult("completed"), None)], map_id=HALL_OF_FAME, in_game=False)
@@ -252,6 +298,7 @@ def test_usage_limit_waits_for_the_reset_and_keeps_the_summary(tmp_path):
     runner, briefs, sleeps = make_runner(tmp_path, results)
     assert runner.loop("url", max_sessions=3) == "max_sessions"
     assert 3500 < sleeps[0] <= 3600
+    assert [e["data"]["seconds"] for e in runner.memory.events("limit_wait")] == sleeps
     assert "walked north" in briefs[2]
 
 
@@ -449,6 +496,18 @@ def test_the_development_bench_leaves_the_live_game_alone_and_stages_a_tool(game
     finally:
         bench.close()
         live.emu.close()
+
+
+def test_the_ladder_reads_progress_from_the_rom(game):
+    gen1, emu, bedroom = game
+    emu.load_state(bedroom)
+    live, ladder = Game(emu, gen1), stuck.Ladder(gen1)
+    assert ladder.observe(live.progress_state(), 1) == 0 and ladder.best
+    live.act("walk", direction="right")
+    first = ladder.best
+    assert ladder.observe(live.progress_state(), 1) == 0 and ladder.best > first  # a new tile
+    live.act("walk", direction="left")
+    assert ladder.observe(live.progress_state(), 1) == 0 and (ladder.best, ladder.since) == (first + 1, 1)
 
 
 def test_a_relative_run_dir_becomes_absolute(tmp_path, monkeypatch):
