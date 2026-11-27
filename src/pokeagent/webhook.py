@@ -1,7 +1,8 @@
 """PreToolUse hook for the Claude sessions' WebFetch and WebSearch (`pokeagent hook web --log PATH`).
 
 Logs every request and blocks the ones that could carry data out or reach local services: anything but a plain
-http(s) URL with an ASCII host name, local or private hosts, long token-like runs (hex or base64), and path/query or search text over 200 characters.
+http(s) URL with an ASCII host name, local or private hosts, long token-like runs (hex or base64), and path/query
+or search text over 200 characters.
 Exit code 2 blocks the call; the reason on stderr is shown to the model. Malformed input is blocked (fail closed).
 """
 
