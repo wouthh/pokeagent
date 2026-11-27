@@ -1,15 +1,15 @@
 """Runs: a run directory, the live game, and the loop of Claude sessions that plays until the objective's check
 passes, a limit is reached or a blocker stops it.
 
-A run directory (local only) holds `run.json` (objective, check, ROM identity; never rewritten), `state.json` (session
+A run directory (local only) holds `run.json` (objective, checks, ROM identity; never rewritten), `state.json` (session
 count, last summary and focus), `notes.md`, `play.log`, `checkpoints/*.state`, the raw session streams and the web log.
+The data directory's `memory.db` holds the runs' status, success checks, events and knowledge (see memory.py).
 """
 
 import contextlib
 import hashlib
 import io
 import json
-import operator
 import os
 import shutil
 import threading
@@ -18,10 +18,20 @@ from pathlib import Path
 
 from PIL import Image
 
+from pokeagent import objectives
 from pokeagent.agents.claude_cli import ProviderError, SessionResult, SessionSpec, preflight, run_session
 from pokeagent.emulator.client import Emulator, EmulatorError
 from pokeagent.emulator.cores import core_path
-from pokeagent.games.pokemon_gen1 import CORE, CORE_OPTIONS, DEFAULT_CHECK, DEFAULT_OBJECTIVE, FAMILY, Gen1
+from pokeagent.games.pokemon_gen1 import (
+    CORE,
+    CORE_OPTIONS,
+    DEFAULT_CHECK,
+    DEFAULT_OBJECTIVE,
+    FAMILY,
+    OBSERVATIONS,
+    Gen1,
+)
+from pokeagent.memory import Memory, describe_knowledge
 from pokeagent.server import GameServer
 
 PROMPTS = Path(__file__).with_name("prompts")
@@ -32,7 +42,7 @@ KEEP_CHECKPOINTS = 10
 CONTEXT_FILES = ("notes.md", "state.json")
 CHECKPOINT_EVERY = 25  # actions
 MAX_FAILURES = 5
-OPS = {"==": operator.eq, "!=": operator.ne, ">=": operator.ge, ">": operator.gt, "<=": operator.le, "<": operator.lt}
+KNOWLEDGE_HITS = 5
 LEGEND = "@ you, S person or object, W warp/door, . walkable, , grass, v < > ^ ledges, # blocked"
 
 
@@ -40,8 +50,11 @@ def default_data_dir() -> Path:
     return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "pokeagent"
 
 
-def holds(check: dict, observations: dict) -> bool:
-    return OPS[check["op"]](observations[check["obs"]], check["value"])
+def open_memory(run_dir: Path, data_dir: Path) -> Memory:
+    data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    memory = Memory(data_dir / "memory.db", run_dir.name)
+    memory.open_run(json.loads((run_dir / "run.json").read_text()))
+    return memory
 
 
 class Game:
@@ -86,6 +99,12 @@ class Game:
     def observations(self) -> dict:
         with self.lock:
             return self.adapter.observations(self.adapter.state(self))
+
+    def location(self) -> str:
+        """The current map's name, or "" before a game is in progress."""
+        with self.lock:
+            state = self.adapter.state(self)
+            return state["map"] if state["in_game"] else ""
 
     def full_state(self) -> tuple[str, bytes]:
         with self.lock:
@@ -155,16 +174,20 @@ class Game:
         return f"{result['outcome']} after {result['steps']} step(s)"
 
 
-def new_run(rom: Path, objective: str | None, data_dir: Path) -> Path:
-    """Create a run directory for a supported ROM. Only the adapter's default objective gets its trusted check."""
+def new_run(rom: Path, objective: str | None, data_dir: Path, success: dict | None = None) -> Path:
+    """Create a run directory for a supported ROM. Only the adapter's default objective gets its trusted check;
+    `success` is the user's own check."""
     data = rom.read_bytes()
     adapter = Gen1(data)  # refuses unsupported ROMs
+    if success is not None:
+        objectives.validate(success, [name for name in OBSERVATIONS if name != "in_game"])
     (data_dir / "runs").mkdir(parents=True, exist_ok=True, mode=0o700)
     run_dir = data_dir / "runs" / time.strftime("%Y%m%d-%H%M%S")
     run_dir.mkdir(mode=0o700)
     meta = {
         "objective": objective or DEFAULT_OBJECTIVE,
         "check": None if objective else DEFAULT_CHECK,
+        "success": success,
         "game": adapter.title,
         "family": FAMILY,
         "rom": str(rom.resolve()),
@@ -178,7 +201,8 @@ def new_run(rom: Path, objective: str | None, data_dir: Path) -> Path:
 
 
 class Runner:
-    """The session loop. `provider` runs one Claude session (`run_session` in production, a fake in tests)."""
+    """The session loop. `provider` runs one Claude session (`run_session` in production, a fake in tests); the
+    server's memory holds the run's checks, events and knowledge."""
 
     def __init__(
         self,
@@ -196,6 +220,7 @@ class Runner:
         self.run_dir, self.game, self.server, self.provider, self.sleep = run_dir, game, server, provider, sleep
         self.budget, self.session_timeout, self.model, self.effort = budget, session_timeout, model, effort
         self.meta = json.loads((run_dir / "run.json").read_text())
+        self.memory: Memory = server.memory
         self._actions = 0
         server.after_action = self._after_action
         (run_dir / "sessions").mkdir(exist_ok=True)
@@ -230,6 +255,7 @@ class Runner:
             old.unlink()
             for name in CONTEXT_FILES:
                 old.with_suffix(f".{name}").unlink(missing_ok=True)
+        self.memory.event("checkpoint", {"file": path.name, "reason": reason})
         self.log("checkpoint", f"{path.name} ({reason})")
 
     def restore_context(self, checkpoint: Path) -> None:
@@ -247,30 +273,60 @@ class Runner:
             self.checkpoint(f"{self._actions} actions")
 
     def brief(self, number: int, progress: dict) -> str:
-        check = self.meta["check"]
         notes = self.run_dir / "notes.md"
-        return "\n".join(
-            [
-                f"Objective: {self.meta['objective']}",
-                "Success check: "
-                + (
-                    f"pokeagent checks {check['obs']} {check['op']} {check['value']} automatically after each session."
-                    if check
-                    else "none; the run continues until the user stops it."
-                ),
+        observations = self.game.observations()
+        lines = [f"Objective: {self.meta['objective']}", *self._checks(observations), ""]
+        last_start = (self.memory.events("session_start", limit=1) or [{"id": 0}])[0]["id"]
+        for rejected in self.memory.events("claim_rejected", after=last_start):
+            data = rejected["data"]
+            lines += [
+                f"The user rejected the completion claim ({data['claim']}): {data['why'] or 'no reason given'}",
                 "",
-                f"This is session {number}. You have {self.budget} game actions (press, walk, walk_to, advance_text);"
-                " get_state and notes are free.",
-                f"Last session's summary: {progress.get('summary') or 'none, this is the first session.'}",
-                f"Planned focus: {progress.get('next_focus') or 'none'}",
-                "",
-                "Your notes:",
-                (notes.read_text() if notes.exists() else "") or "(empty)",
-                "",
-                "Current game state:",
-                self.game.state_text(),
             ]
-        )
+        lines += [
+            f"This is session {number}. You have {self.budget} game actions (press, walk, walk_to, advance_text);"
+            " get_state, notes and knowledge tools are free.",
+            f"Last session's summary: {progress.get('summary') or 'none, this is the first session.'}",
+            f"Planned focus: {progress.get('next_focus') or 'none'}",
+            "",
+            "Your notes:",
+            (notes.read_text() if notes.exists() else "") or "(empty)",
+        ]
+        if hits := self.memory.search(f"{self.game.location()} {progress.get('next_focus') or ''}", KNOWLEDGE_HITS):
+            lines += ["", "Knowledge that may bear on this (knowledge_search finds more):"]
+            lines += [describe_knowledge(entry) for entry in hits]
+        return "\n".join([*lines, "", "Current game state:", self.game.state_text()])
+
+    def _checks(self, observations: dict) -> list[str]:
+        in_game = observations["in_game"]
+
+        def now(condition: dict) -> str:
+            return (
+                ("holds" if objectives.holds(condition, observations) else "does not hold")
+                if in_game
+                else "not judged yet"
+            )
+
+        active, proposed = self.memory.checks("active"), self.memory.checks("proposed")
+        lines = [
+            f"Success check ({check['source']}): {objectives.describe(check['condition'])}; {now(check['condition'])}."
+            " pokeagent evaluates it after every session and completes the run when it holds."
+            for check in active
+        ] or [
+            "No authoritative success check: the run continues until the user stops it. You may propose a check"
+            " (propose_success_check) or, when no check can show it, report the objective complete."
+        ]
+        if proposed:
+            check = proposed[-1]
+            lines.append(
+                f"Your proposed check #{check['id']}: {objectives.describe(check['condition'])};"
+                f" {now(check['condition'])}."
+                " When it holds after a session, the run pauses for the user to confirm."
+            )
+        if in_game:
+            values = ", ".join(f"{name}={value}" for name, value in observations.items() if name != "in_game")
+            lines.append(f"Observations for checks: {values}.")
+        return lines
 
     def loop(self, url: str, max_sessions: int | None = None) -> str:
         """Run sessions until something stops the run; return why."""
@@ -278,10 +334,9 @@ class Runner:
         progress = json.loads(progress_file.read_text()) if progress_file.exists() else {"sessions": 0}
         failures = started = 0
         while True:
-            observations = self.game.observations()
-            if self.meta["check"] and observations["in_game"] and holds(self.meta["check"], observations):
-                self.log("complete", f"objective check passed: {self.meta['check']}")
-                return "complete"
+            if verdict := objectives.judge(self.memory, self.game.observations()):
+                self.log(verdict, self.memory.status()[1])
+                return verdict
             if max_sessions is not None and started >= max_sessions:
                 return "max_sessions"
             started += 1
@@ -302,6 +357,7 @@ class Runner:
                 effort=self.effort,
             )
             self.log("session", f"{number} start")
+            self.memory.event("session_start", {}, number)
             try:
                 result: SessionResult = self.provider(spec, self.on_event)
             finally:
@@ -309,8 +365,10 @@ class Runner:
             if session.summary:
                 progress["summary"], progress["next_focus"] = session.summary, session.next_focus
             elif session.actions:
+                last = "; ".join(e["data"]["outcome"] for e in self.memory.events("action", session=number, limit=5))
                 progress["summary"] = (
-                    f"(session {number} took {session.actions} actions and ended with {result.end} before end_session)"
+                    f"(no summary: session {number} ended with {result.end} after {session.actions} actions;"
+                    f" its last actions: {last})"
                 )
             progress_file.write_text(json.dumps(progress, indent=1) + "\n")
             self.checkpoint(f"session {number}")
@@ -319,6 +377,12 @@ class Runner:
                 f"session {number}: {result.end}, {result.num_turns} turns, {session.actions} actions, "
                 f"${result.cost_usd:.2f}" + (f", {result.error}" if result.error else ""),
             )
+            ended = {"end": result.end, "turns": result.num_turns, "actions": session.actions}
+            self.memory.event("session_end", ended | {"cost_usd": result.cost_usd, "usage": result.usage}, number)
+            if session.claim:
+                objectives.claim(self.memory, f"the agent reported the objective complete: {session.claim}")
+                self.log("claimed", session.claim)
+                return "claimed"
             if result.end == "auth_error":
                 raise ProviderError(f"the Claude CLI lost its login: {result.error}")
             if result.end == "limit":
@@ -353,36 +417,43 @@ def play(
     if hashlib.sha1(data).hexdigest() != meta["rom_sha1"]:
         raise ValueError(f"{rom} is no longer the ROM this run started with")
     adapter = Gen1(data)
-    version = preflight()
-    viewer = None
-    if watch:
-        from pokeagent.viewer import Viewer
+    with contextlib.closing(open_memory(run_dir, data_dir)) as memory:
+        status, why = memory.status()
+        if status != "running":
+            settle = (
+                f"; settle it with `pokeagent objective confirm|reject {run_dir.name}`" if status == "claimed" else ""
+            )
+            raise ValueError(f"run {run_dir.name} is {status} ({why}){settle}")
+        version = preflight()
+        viewer = None
+        if watch:
+            from pokeagent.viewer import Viewer
 
-        viewer = Viewer()
-    with Emulator(core_path(meta["core"]), rom, options=meta["core_options"]) as emu:
-        game = Game(emu, adapter, speed, viewer)
-        if checkpoints := sorted((run_dir / "checkpoints").glob("*.state")):
-            game.load_state(checkpoints[-1].read_bytes())
-        if viewer:
-            viewer.frame = emu.frame()
-        server = GameServer(game, run_dir / "notes.md", data_dir / "harness-issues.md", run_dir.name)
-        runner = Runner(run_dir, game, server, model=model, effort=effort)
-        if checkpoints:
-            runner.restore_context(checkpoints[-1])
-        origin = checkpoints[-1].name if checkpoints else "power-on"
-        runner.log("start", f"{meta['game']}; {version}; from {origin}")
-        url = server.start()
-        reason = "error"
-        try:
-            reason = runner.loop(url, max_sessions)
-        except KeyboardInterrupt:
-            reason = "interrupted"
-        except EmulatorError as e:
-            # ponytail: no automatic restart yet (crash recovery is phase 5); resume continues from the last checkpoint
-            reason = f"the emulator failed ({e}); resume continues from the last checkpoint"
-        finally:
-            with contextlib.suppress(EmulatorError):  # nothing to save once the emulator is gone
-                runner.checkpoint("stop")
-            server.stop()
-            runner.log("stop", reason)
-        return reason
+            viewer = Viewer()
+        with Emulator(core_path(meta["core"]), rom, options=meta["core_options"]) as emu:
+            game = Game(emu, adapter, speed, viewer)
+            if checkpoints := sorted((run_dir / "checkpoints").glob("*.state")):
+                game.load_state(checkpoints[-1].read_bytes())
+            if viewer:
+                viewer.frame = emu.frame()
+            server = GameServer(game, memory, run_dir / "notes.md", data_dir / "harness-issues.md")
+            runner = Runner(run_dir, game, server, model=model, effort=effort)
+            if checkpoints:
+                runner.restore_context(checkpoints[-1])
+            origin = checkpoints[-1].name if checkpoints else "power-on"
+            runner.log("start", f"{meta['game']}; {version}; from {origin}")
+            url = server.start()
+            reason = "error"
+            try:
+                reason = runner.loop(url, max_sessions)
+            except KeyboardInterrupt:
+                reason = "interrupted"
+            except EmulatorError as e:
+                # ponytail: no automatic restart yet (phase 5b); resume continues from the last checkpoint
+                reason = f"the emulator failed ({e}); resume continues from the last checkpoint"
+            finally:
+                with contextlib.suppress(EmulatorError):  # nothing to save once the emulator is gone
+                    runner.checkpoint("stop")
+                server.stop()
+                runner.log("stop", reason)
+            return reason

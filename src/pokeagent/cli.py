@@ -1,6 +1,8 @@
 """Command-line entry point."""
 
 import argparse
+import contextlib
+import json
 import sys
 from pathlib import Path
 
@@ -18,6 +20,11 @@ def build_parser() -> argparse.ArgumentParser:
     play = commands.add_parser("play", help="start a new run on a ROM")
     play.add_argument("--rom", type=Path, required=True, help="your own ROM dump (supported games only)")
     play.add_argument("--objective", help="what the agent should achieve (default: finish the game)")
+    play.add_argument(
+        "--success",
+        type=json.loads,
+        help='your own success check as JSON, e.g. \'{"obs": "badges", "op": ">=", "value": 8}\'',
+    )
     resume = commands.add_parser("resume", help="continue a run from its latest checkpoint")
     resume.add_argument("run", help="run id (a folder name under <data dir>/runs) or a run folder")
     for p in (play, resume):
@@ -27,10 +34,22 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--effort", help="reasoning effort for the sessions")
         p.add_argument("--watch", action="store_true", help="show the game in a window")
         p.add_argument("--watch-speed", type=float, help="emulation speed, a multiple of real time (default: uncapped)")
+    objective = commands.add_parser("objective", help="settle a run's completion claim or approve its proposed check")
+    objective.add_argument("action", choices=["confirm", "reject", "approve-check"])
+    objective.add_argument("run", help="run id or run folder")
+    objective.add_argument("--reason", default="", help="for reject: what is still missing (the agent reads it)")
+    objective.add_argument("--data-dir", type=Path, help="where runs live (default ~/.local/share/pokeagent)")
     hook = commands.add_parser("hook", help="hooks called by Claude sessions (internal)")
     hook.add_argument("kind", choices=["web"])
     hook.add_argument("--log", type=Path, required=True)
     return parser
+
+
+def find_run(run: str, data_dir: Path) -> Path:
+    run_dir = Path(run) if "/" in run else data_dir / "runs" / run
+    if not (run_dir / "run.json").exists():
+        raise ValueError(f"no run at {run_dir}")
+    return run_dir
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -40,17 +59,32 @@ def main(argv: list[str] | None = None) -> int:
 
         if installed := fetch_cores():
             print(f"installed {', '.join(installed)} into {cores_dir()}")
+    elif args.command == "objective":
+        from pokeagent import objectives, play
+
+        data_dir = args.data_dir or play.default_data_dir()
+        try:
+            run_dir = find_run(args.run, data_dir)
+            with contextlib.closing(play.open_memory(run_dir, data_dir)) as memory:
+                if args.action == "confirm":
+                    print(f"run {run_dir.name} complete: {objectives.confirm(memory)}")
+                elif args.action == "reject":
+                    objectives.reject(memory, args.reason)
+                    print(f"claim rejected; continue with `pokeagent resume {run_dir.name}`")
+                else:
+                    print(f"approved as a user check: {objectives.describe(objectives.approve_check(memory))}")
+        except (OSError, ValueError) as e:
+            print(f"pokeagent: {e}", file=sys.stderr)
+            return 1
     elif args.command in ("play", "resume"):
         from pokeagent import play
 
         data_dir = args.data_dir or play.default_data_dir()
         try:
             if args.command == "play":
-                run_dir = play.new_run(args.rom, args.objective, data_dir)
+                run_dir = play.new_run(args.rom, args.objective, data_dir, args.success)
             else:
-                run_dir = Path(args.run) if "/" in args.run else data_dir / "runs" / args.run
-                if not (run_dir / "run.json").exists():
-                    raise ValueError(f"no run at {run_dir}")
+                run_dir = find_run(args.run, data_dir)
             print(f"run {run_dir.name}: log at {run_dir / 'play.log'}")
             reason = play.play(
                 run_dir,
