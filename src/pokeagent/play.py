@@ -362,7 +362,8 @@ class Runner:
         self._after_lock = threading.Lock()  # a save and its write stay together, and a restart waits for them
         self.ladder = stuck.Ladder(game.adapter)
         self._climbed = 0  # the highest ladder level reached in the current session
-        self._maps, self._seen = self._visited_maps(), None  # milestone state; _seen: badges and Pokédex count
+        self._maps = self._visited_maps()  # milestone state; _seen: badges and Pokédex count
+        self._baseline()
         self.number: int | None = None  # the current session
         server.after_action, server.recover = self._after_action, self.recover
         (run_dir / "sessions").mkdir(exist_ok=True)
@@ -421,8 +422,10 @@ class Runner:
         state = self.game.progress_state()
         if not state["in_game"]:
             return 0, ""
-        self._milestones(state, saved)
+        badge = self._milestones(state)
         climbed = self.ladder.observe(state, len(self._maps))
+        if badge:  # after the ladder took the badge into its best score, so the checkpoint is tagged with it
+            self.checkpoint(f"badge {state['badges']}", saved)
         if not climbed:
             return 0, ""
         self._climbed = max(self._climbed, climbed)
@@ -433,14 +436,20 @@ class Runner:
             notice += "\nKnowledge that may bear on this:\n" + "\n".join(describe_knowledge(e) for e in hits)
         return climbed, notice
 
-    def _milestones(self, state: dict, saved: bytes) -> None:
-        """Record first visits to maps, new badges and new Pokédex entries as milestone events of the timeline."""
+    def _baseline(self) -> None:
+        """The badges and Pokédex count of the loaded game, read before its first action."""
+        state = self.game.progress_state()
+        self._seen = {"badges": state["badges"], "dex_owned": state["dex_owned"]} if state["in_game"] else None
+
+    def _milestones(self, state: dict) -> bool:
+        """Record first visits to maps, new badges and new Pokédex entries as milestone events of the timeline.
+        Returns whether a badge was earned."""
         found = []
         if state["map_id"] not in self._maps:
             self._maps.add(state["map_id"])
             found.append({"kind": "map", "map_id": state["map_id"], "text": f"first visit to {state['map']}"})
         seen = {"badges": state["badges"], "dex_owned": state["dex_owned"]}
-        if self._seen is not None:  # the first state after a start or restore is the baseline
+        if self._seen is not None:
             if seen["badges"] > self._seen["badges"]:
                 found.append({"kind": "badge", "badges": seen["badges"], "text": f"badge {seen['badges']}"})
             if seen["dex_owned"] > self._seen["dex_owned"]:
@@ -451,8 +460,7 @@ class Runner:
         for milestone in found:
             self.memory.event("milestone", milestone, self.number)
             self.log("milestone", milestone["text"])
-        if any(m["kind"] == "badge" for m in found):
-            self.checkpoint(f"badge {seen['badges']}", saved)
+        return any(m["kind"] == "badge" for m in found)
 
     def _visited_maps(self) -> set[int]:
         history = self.memory.history()
@@ -471,7 +479,8 @@ class Runner:
             return False
         data = restore(self.run_dir, self.memory, target["data"]["file"])
         self.game.load_state((self.run_dir / "recovery.state").read_bytes())
-        self._maps, self._seen = self._visited_maps(), None
+        self._maps = self._visited_maps()
+        self._baseline()
         self.log("restore", f"{data['file']} (stuck level 4): {data['undone_actions']} actions undone")
         return True
 
@@ -666,6 +675,9 @@ class Runner:
             else:
                 failures = 0
             climbed, self._climbed = self._climbed, 0
+            if climbed >= 4 and (verdict := objectives.judge(self.memory, self.game.observations())):
+                self.log(verdict, self.memory.status()[1])  # success beats the stuck consequences
+                return verdict
             if climbed == 4 and self._restore_progress():
                 progress = json.loads(progress_file.read_text())
             elif climbed >= 4:
