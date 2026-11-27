@@ -1,0 +1,20 @@
+# Game files and run data never belong in the repository (the gate also checks this).
+# Run data lives in ~/.local/share/pokeagent/ by default; these cover local experiments.
+/roms/
+/runs/
+*.gb
+*.gbc
+*.gba
+*.nds
+*.sav
+*.srm
+*.state
+!/tests/fixtures/dmg-acid2.gb
+# Python
+__pycache__/
+*.pyc
+.venv/
+.ruff_cache/
+.pytest_cache/
+# trail code map
+/graft/

@@ -1,0 +1,1 @@
+{ "gate": "scripts/check.sh", "gateWeight": "light", "merge": "rebase", "setup": "uv sync --frozen" }
