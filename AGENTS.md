@@ -15,8 +15,10 @@ first use case, not an architectural constraint. Design and decisions: [docs/arc
   - `sandbox.py`: bwrap argv, in-namespace rlimits, the fail-closed probe (`ensure()`).
   - `emulator/`: `cores.py` (pinned core download and checksum), `worker.py` (one core per sandboxed process, JSON
     line + bytes protocol, no memory-write op), `client.py` (`Emulator`, the orchestrator's handle).
+  - `games/pokemon_gen1.py`: the Red/Blue adapter (state, screen modes, walk grid, macro actions, scoring).
 - `tests/`: pytest suite; runs without any game ROM. `tests/fixtures/` holds the MIT dmg-acid2 test ROM, its
-  reference image and licence. ROM-dependent tests skip unless `POKEAGENT_RED_ROM` points to a dump.
+  reference image and licence. ROM tests (`tests/test_gen1.py`) use `POKEAGENT_ROM`, else the first supported dump
+  in the main checkout's ignored `roms/` folder (worktrees find it through the git common dir), and skip otherwise.
 - `scripts/check.sh`: the full local gate. `.prloop.json`: review-loop config.
 - `docs/architecture.md`: components, isolation, data boundaries, verified spike facts and the Decisions log.
 - `.github/workflows/ci.yml`: lint and ROM-free tests on push/PR. Informational; not a prloop gate.
@@ -58,14 +60,15 @@ first use case, not an architectural constraint. Design and decisions: [docs/arc
 ```text
 Focused check:   uv run pytest -q tests/<file>.py
 Full local gate: scripts/check.sh
-ROM checks:      POKEAGENT_RED_ROM=/path/to/your/dump.gb uv run pytest -q
+ROM checks:      POKEAGENT_ROM=/path/to/your/dump.gb uv run pytest -q tests/test_gen1.py
 ```
 
 The gate needs uv (Python 3.13 is fetched by uv), `bwrap` with unprivileged user namespaces, and `7z`. It runs ruff
 check, ruff format --check, `pokeagent fetch-cores` (a one-time 274 MB download per machine), and pytest, and fails
 on tracked ROM/save/state files. Sandbox tests never skip: a missing sandbox fails the gate. Measured 2026-11-27
-(phase 2, cores cached, E-cores): 7.4 s wall time, about one core, under 100 MB RSS. Re-measure when the gate
-changes. CI runs the same gate without a game ROM; prloop does not wait on it.
+(phase 2, cores cached, E-cores): 7.4 s wall time, about one core, under 100 MB RSS. With a ROM present (phase 3)
+the ROM tests add about 36 s, mostly booting a new game once: 44 s in total, still about one core. Re-measure when
+the gate changes. CI runs the same gate without a game ROM; prloop does not wait on it.
 
 ## Delivery
 
