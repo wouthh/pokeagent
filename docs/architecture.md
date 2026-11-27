@@ -82,6 +82,40 @@ text is stored in the repository; `gen1_map_names.txt` holds only the map consta
 - Tests boot a new game on the user's own ROM (`POKEAGENT_ROM`, or a supported dump in the checkout's ignored
   `roms/` folder) and skip without one.
 
+## Play loop *(implemented, phase 4)*
+
+`pokeagent play --rom PATH [--objective TEXT]` creates a run; `pokeagent resume RUN` continues one from its latest
+checkpoint. Both take `--max-sessions`, `--model`, `--effort`, `--watch` (Tk window with the frame and the last
+action) and `--watch-speed` (a multiple of real time; uncapped by default).
+
+- **Run directory** (`<data dir>/runs/<id>/`, mode 0700): `run.json` (objective, trusted check, ROM path and
+  sha1, core and options; written once), `state.json` (session count, last summary and focus), `notes.md`,
+  `play.log` (one line per message, tool call and lifecycle event), `checkpoints/` (the last 10 states, written
+  atomically every 25 actions, at every session end and on stop), `sessions/NNNN.jsonl` (raw streams) and `web.jsonl` (the web
+  hook's log). Harness issues go to `<data dir>/harness-issues.md`.
+- **Objective:** only the adapter's default objective gets its trusted check (Red/Blue: the Hall of Fame map),
+  evaluated before every session once a game is in progress (power-on RAM is noise that could match by chance); a custom objective has no check yet and runs until stopped. Proposed and user
+  checks arrive with phase 5.
+- **`server.py`:** the `game` MCP server on a free 127.0.0.1 port, in a background thread. A per-session bearer
+  token is checked before MCP sees a request, and the Host header must name this server. Tools: `get_state`
+  (full text, whole-map ASCII, 3x screenshot; free), the actions `press`, `walk`, `walk_to` and `advance_text`
+  (budget 100 per session; results report what changed, the screen text and a 9x9 map crop, with a screenshot
+  only when the screen mode changed), `notes_read`/`notes_write` (8 KB), `end_session(summary, next_focus)` and
+  `report_harness_issue`.
+- **`play.py`:** `Game` serialises every emulator call under one lock and is what the adapter drives, so it can
+  pace emulation and feed the viewer. `Runner` runs one session at a time with a brief (objective, check, budget,
+  last summary and focus, notes, current state):
+  - `limit`: waits until the reported reset (at least a minute, 15 minutes without a reset time);
+  - `auth_error`: stops the run; `InitRejected` stops it before any model request;
+  - `error`: backs off 30 s, 60 s, …; five in a row stop the run;
+  - `completed`, `max_turns` and `timeout` continue with the next session.
+  - If the emulator worker fails, every game tool refuses with the reason, the run stops after the session and
+    `resume` continues from the last checkpoint (automatic recovery comes with the input log in phase 5).
+- **State before a game:** until a game is started or loaded, the adapter reports only the screen, because WRAM
+  holds SameBoy's randomised power-on contents.
+- **Prompt:** `prompts/play.md` explains the tools, the budget, what persists and the rules (controller input
+  only; web content is unverified). It names no capability to build.
+
 ## Isolation and permissions *(sandbox, Claude provider and web hook implemented; the rest planned)*
 
 - `sandbox.ensure()` runs the probe once per process and raises `SandboxError` unless all of these hold:

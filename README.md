@@ -48,6 +48,17 @@ uv run pokeagent --help
 Emulator cores always run in a bubblewrap sandbox; if the sandbox cannot be set up (for example when unprivileged
 user namespaces are disabled), pokeagent refuses to start rather than running unsandboxed.
 
+## Playing
+
+```sh
+uv run pokeagent play --rom /path/to/your/red.gb --watch      # new run towards the default objective
+uv run pokeagent play --rom /path/to/your/red.gb --objective "Get the first badge" --max-sessions 10
+uv run pokeagent resume 20261127-170000 --watch               # continue a run from its latest checkpoint
+```
+
+Each run lives in `~/.local/share/pokeagent/runs/<id>/`: `play.log` shows every message and action, `notes.md` the
+agent's own notes. Ctrl-C stops a run after saving a checkpoint; closing the `--watch` window only stops watching.
+
 ## What stays local and what leaves your machine
 
 - **Local only:** the ROM, save states, the database, logs, the agent-built capability library and harness issues,

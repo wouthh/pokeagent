@@ -5,7 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from pokeagent.games.pokemon_gen1 import ROMS
+from pokeagent.emulator.client import Emulator
+from pokeagent.emulator.cores import core_path
+from pokeagent.games.pokemon_gen1 import CORE_OPTIONS, ROMS, Gen1
 
 
 def _find_rom() -> Path | None:
@@ -32,3 +34,27 @@ def rom_path() -> Path:
     if path is None:
         pytest.skip("no Pokémon Red/Blue ROM (set POKEAGENT_ROM or put one in roms/)")
     return path
+
+
+@pytest.fixture(scope="session")
+def game(rom_path):
+    """(adapter, emulator, state of a new game standing in the bedroom). Boots once; tests load the state."""
+    gen1 = Gen1(rom_path.read_bytes())
+    with Emulator(core_path("sameboy"), rom_path, options=CORE_OPTIONS) as emu:
+        emu.run([], 300)
+        for _ in range(60):  # title screen until the CONTINUE/NEW GAME menu
+            if gen1.screen_mode(gen1.screen_tiles(emu), False)["cursor"]:
+                break
+            gen1.press(emu, "start", wait=40)
+        gen1.press(emu, "a", wait=30)
+        names = 0
+        for _ in range(40):  # Oak's speech; take the first preset name (below NEW NAME) for player and rival
+            outcome = gen1.advance_text(emu)["outcome"]
+            state = gen1.state(emu)
+            if outcome == "menu":
+                x, y = state["screen"]["cursor_at"]
+                assert gen1.choose(emu, gen1.screen_text(gen1.screen_tiles(emu))[y + 2][x + 1 :].split()[0])
+                names += 1
+            elif names == 2 and state["map_size"] != [0, 0]:
+                break
+        yield gen1, emu, emu.save_state()

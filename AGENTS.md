@@ -16,6 +16,8 @@ first use case, not an architectural constraint. Design and decisions: [docs/arc
   - `emulator/`: `cores.py` (pinned core download and checksum), `worker.py` (one core per sandboxed process, JSON
     line + bytes protocol, no memory-write op), `client.py` (`Emulator`, the orchestrator's handle).
   - `games/pokemon_gen1.py`: the Red/Blue adapter (state, screen modes, walk grid, macro actions, scoring).
+  - `server.py`: the `game` MCP server (token and Host checks, tools, budgets). `play.py`: runs, the live `Game`,
+    the session loop. `viewer.py`: the `--watch` window. `prompts/play.md`: the play-mode system prompt.
   - `agents/claude_cli.py`: the Claude CLI provider (preflight, isolated argv, fail-closed `init` check, stream
     parsing, end classification). `webhook.py`: the `pokeagent hook web` policy for WebFetch/WebSearch.
 - `tests/`: pytest suite; runs without any game ROM. `tests/fixtures/` holds the MIT dmg-acid2 test ROM, its
