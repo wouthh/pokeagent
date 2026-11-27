@@ -21,7 +21,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from pokeagent import capabilities, develop, extensions, objectives, stuck
+from pokeagent import capabilities, develop, extensions, objectives, stats, stuck
 from pokeagent.agents.claude_cli import ProviderError, SessionResult, SessionSpec, preflight, run_session
 from pokeagent.capabilities import Registry
 from pokeagent.emulator.client import Emulator, EmulatorError
@@ -419,6 +419,11 @@ class Runner:
                 self.checkpoint(f"{self._actions} actions", state)
             return watched
 
+    def show(self, now: str = "") -> None:
+        """Refresh the viewer's run panel, if a viewer is open."""
+        if self.game.viewer:
+            self.game.viewer.panel = stats.status(self.memory, self.run_dir, now)
+
     def _watch(self, saved: bytes) -> tuple[int, str]:
         state = self.game.progress_state()
         if not state["in_game"]:
@@ -429,6 +434,7 @@ class Runner:
             self.checkpoint(f"badge {state['badges']}", saved)
         if not climbed:
             return 0, ""
+        self.show(f"session {self.number} (play)")
         self._climbed = max(self._climbed, climbed)
         self.memory.event("stuck", {"level": climbed, "since": self.ladder.since}, self.number)
         self.log("stuck", f"level {climbed} after {self.ladder.since} actions without progress")
@@ -461,6 +467,8 @@ class Runner:
         for milestone in found:
             self.memory.event("milestone", milestone, self.number)
             self.log("milestone", milestone["text"])
+        if found:
+            self.show(f"session {self.number} (play)")
         return any(m["kind"] == "badge" for m in found)
 
     def _visited_maps(self) -> set[int]:
@@ -644,6 +652,7 @@ class Runner:
             progress_file.write_text(json.dumps(progress, indent=1) + "\n")  # session numbers are never reused
             self.log("session", f"{number} start")
             self.memory.event("session_start", {}, number)
+            self.show(f"session {number} (play)")
             try:
                 result: SessionResult = self.provider(spec, self.on_event)
             finally:
@@ -665,6 +674,7 @@ class Runner:
             )
             ended = {"end": result.end, "turns": result.num_turns, "actions": session.actions}
             self.memory.event("session_end", ended | {"cost_usd": result.cost_usd, "usage": result.usage}, number)
+            self.show()
             if session.claim:
                 objectives.claim(self.memory, f"the agent reported the objective complete: {session.claim}")
                 self.log("claimed", session.claim)
@@ -733,6 +743,7 @@ class Runner:
             (self.run_dir / "state.json").write_text(json.dumps(progress, indent=1) + "\n")
             self.log("session", f"{number} start (develop {request['tool']}, attempt {attempt})")
             self.memory.event("session_start", {"mode": "develop"}, number)
+            self.show(f"session {number} (develop {request['tool']})")
             result: SessionResult = self.provider(spec, self.on_event)
         finally:
             self.server.close_session(session)
@@ -743,6 +754,7 @@ class Runner:
         self.memory.event("development_cycle", cycle | {"validations": len(bench.reports), "staged": staged}, number)
         ended = {"end": result.end, "turns": result.num_turns, "actions": session.actions, "mode": "develop"}
         self.memory.event("session_end", ended | {"cost_usd": result.cost_usd, "usage": result.usage}, number)
+        self.show()
         self.log(
             "end",
             f"session {number} (develop): {result.end}, {result.num_turns} turns, {len(bench.reports)} validations,"

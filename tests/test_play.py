@@ -2,6 +2,7 @@ import json
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,7 +22,7 @@ from pokeagent.validation import validate
 
 
 class FakeGame:
-    adapter = Gen1  # for its progress score
+    adapter, viewer = Gen1, None  # Gen1 for its progress score
 
     def state_text(self):
         return f"on map {self.map_id}"
@@ -316,6 +317,21 @@ def test_success_is_judged_before_a_stuck_restore(tmp_path):
 
     runner.provider = acting
     assert runner.loop("url") == "complete" and not runner.memory.events("restore")
+
+
+def test_the_viewer_panel_follows_the_run(tmp_path):
+    runner, _, _ = make_runner(tmp_path, [(SessionResult("completed"), "found the lab")])
+    runner.game.viewer = SimpleNamespace(panel="")
+    replay, shown = runner.provider, []
+
+    def watching(spec, on_event):
+        shown.append(runner.game.viewer.panel)
+        return replay(spec, on_event)
+
+    runner.provider = watching
+    runner.loop("url", max_sessions=1)
+    assert "now session 1 (play)" in shown[0]
+    assert "Sessions: 1 play, 0 develop; 3 actions" in runner.game.viewer.panel
 
 
 def test_the_check_waits_for_a_game_in_progress(tmp_path):
