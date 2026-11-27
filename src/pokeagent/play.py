@@ -123,6 +123,8 @@ class Game:
 
     def _do(self, name: str, args: dict) -> str:
         adapter = self.adapter
+        if name in ("walk", "walk_to") and not adapter.state(self)["in_game"]:
+            raise ValueError("no game is in progress yet; use press and advance_text until one is")
         match name:
             case "press":
                 button, times = args["button"], args["times"]

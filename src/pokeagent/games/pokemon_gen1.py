@@ -69,7 +69,8 @@ def decode(data: bytes) -> str:
 
 
 def bcd(data: bytes) -> int:
-    return int("".join(f"{b:02x}" for b in data))
+    digits = "".join(f"{b:02x}" for b in data)
+    return int(digits) if digits.isdigit() else 0  # not BCD: power-on noise before a game is loaded
 
 
 @dataclass
