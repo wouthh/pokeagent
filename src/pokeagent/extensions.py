@@ -297,6 +297,7 @@ class Runner:
                 return self._store(capability, method, args)
             case "press" | "hold" | "wait" | "call":
                 result = self._act(method, args, budget, depth)
+                self._spend(budget, 0)  # a compound builtin may have run past the frame limit
                 if "invariants" in spec and not objectives.holds(spec["invariants"], game._observations()):
                     raise _Violation(f"{spec['name']}: invariant failed ({objectives.describe(spec['invariants'])})")
                 return result
@@ -305,10 +306,12 @@ class Runner:
     def _charge(self, action: str, args: dict, budget: Budget):
         """One builtin action of a macro, under the tool's shared budget."""
         self._spend(budget, _cost(action, args))
-        return self.game._do(action, args)
+        result = self.game._do(action, args)
+        self._spend(budget, 0)
+        return result
 
-    def _spend(self, budget: Budget, inputs: int) -> None:
-        if time.monotonic() > budget.deadline or self.game.frames > budget.frame_end:
+    def _spend(self, budget: Budget, inputs: int, frames: int = 0) -> None:
+        if time.monotonic() > budget.deadline or self.game.frames + frames > budget.frame_end:
             raise _Violation("the call's budget of frames or time is used up")
         budget.inputs -= inputs
         if budget.inputs < 0:
@@ -317,7 +320,10 @@ class Runner:
     def _act(self, method: str, args: dict, budget: Budget, depth: int):
         game = self.game
         if method != "call":
-            self._spend(budget, _cost(method, args))
+            frames = args.get("frames")
+            self._spend(
+                budget, _cost(method, args), frames if method in ("hold", "wait") and isinstance(frames, int) else 0
+            )
         match method:
             case "press":
                 return game._do("press", {"button": args.get("button"), "times": args.get("times", 1)})

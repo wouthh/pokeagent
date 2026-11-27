@@ -309,6 +309,21 @@ def test_a_tool_validates_on_the_rom(game, tmp_path):
     assert [s["step"] for s in report["steps"]][-2:] == ["contract on live", "contract runs"]
 
 
+def test_each_contract_run_starts_with_empty_scratch_stores(game, tmp_path):
+    gen1, emu, bedroom = game
+    memory = Memory(tmp_path / "memory.db", "run")
+    memory.open_run({"objective": "x", "rom_sha1": "red", "family": "pokemon-gen1"})
+    trial = Game(emu, gen1, registry=Registry(memory), library=tmp_path / "library", tkv=tmp_path / "tkv.json")
+    files = {
+        "tool.py": "def run(ctx):\n    seen = ctx.kv.get('seen')\n    ctx.kv.set('seen', True)\n"
+        "    assert seen is None, 'a store leaked from an earlier run'\n",
+        "test_tool.py": "def test_ok(ctx):\n    ctx.call('step')\n",
+    }
+    manifest = {"name": "step", "description": "d", "examples": [{}, {}]}
+    report = validate(trial, manifest, files, {}, [("live", bedroom)], "rom", 1, set(OBSERVATIONS), set())
+    assert report["passed"], report
+
+
 def test_a_relative_run_dir_becomes_absolute(tmp_path, monkeypatch):
     runner, _, _ = make_runner(tmp_path, [])
     monkeypatch.chdir(tmp_path)
