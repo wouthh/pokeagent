@@ -58,6 +58,14 @@ def test_rejects_bad_requests(emu):
     emu.run(frames=1)  # the worker is still healthy
 
 
+def test_fresh_worker_saves_and_reloads_state():
+    with Emulator(core_path("sameboy"), FIXTURES / "dmg-acid2.gb") as e:
+        state = e.save_state()
+    with Emulator(core_path("sameboy"), FIXTURES / "dmg-acid2.gb") as e:
+        e.load_state(state)
+        assert e.save_state() == state
+
+
 def test_dead_worker_raises(tmp_path):
     e = Emulator(core_path("sameboy"), FIXTURES / "dmg-acid2.gb")
     e.close()

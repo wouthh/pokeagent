@@ -61,6 +61,27 @@ Thin interfaces exist only at these seams, each with one implementation for now:
   once in their final SQLite form. The replay property they rely on (same state plus same inputs gives the same RAM
   hash and the same state) is tested now.
 
+## Game adapter: Pokémon Red/Blue *(implemented, phase 3)*
+
+`games/pokemon_gen1.py`, for the English Red and Blue (sha1 allowlist; any other ROM is refused). Addresses come
+from the pret pokered disassembly. Pokémon, item and move names are read from the user's ROM at runtime, so no game
+text is stored in the repository; `gen1_map_names.txt` holds only the map constant names.
+
+- **State** (`state`): map and position, facing, screen text decoded from the tile map, screen mode
+  (overworld, dialog, menu, battle, plus cursor, yes/no and waiting-arrow flags), names, party, bag, money, badges,
+  Pokédex counts and the current battle.
+- **Walk grid** (`grid`): one cell per player step, built from the current map's blocks, the tileset's blocks and
+  collision list, and the lower-left tile of each step square (the tile the game checks). Tile-pair collisions,
+  one-way ledges (overworld tileset only), sprites and warps are included; paths come from a BFS.
+- **Actions**, controller input only: `press`, `step`/`walk`, `walk_to(x, y)` (re-plans after every step and stops on
+  a map change, battle or dialog), `choose(label)` for menus, and `advance_text`, which presses A through dialog but
+  never at a menu or yes/no prompt.
+- **Scoring and checks:** `fingerprint` (the standard groups for contracts and stuck detection), `progress_score`
+  (badges, maps, Pokédex, levels and experience, new tiles), `observations` (trusted values for success checks) and
+  the default objective's check (the Hall of Fame map).
+- Tests boot a new game on the user's own ROM (`POKEAGENT_ROM`, or a supported dump in the checkout's ignored
+  `roms/` folder) and skip without one.
+
 ## Isolation and permissions *(sandbox implemented in phase 2; the rest planned, phases 4–7)*
 
 - `sandbox.ensure()` runs the probe once per process and raises `SandboxError` unless all of these hold:
@@ -128,7 +149,22 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
   built-in boot ROM.
 - **Options:** `sameboy_model` (Auto, Game Boy, GBC revisions…), `sameboy_mono_palette`, `sameboy_rtc` and others,
   all readable through `session.options`.
-- Whether SRAM is part of a serialized state is checked once a battery-backed ROM is available (phase 3).
+- SameBoy refuses to serialize before the first `retro_run`, so the worker runs one frame at startup.
+- A serialized state carries the whole 32 KB cartridge RAM. After an in-game save, loading the earlier state also
+  restores the earlier save data, so checkpoints need no separate `.sav` and an in-game save cannot leak between
+  timelines.
+
+**Pokémon Red/Blue (English)**
+
+- The pret pokered symbols used by the adapter are identical in the Red and Blue builds.
+- After a warp, the map id changes about 30 frames before the new map's blocks are loaded; reading the walk grid
+  earlier shows the old map. `step` waits until the map buffer changes and input is accepted again.
+- Menus drop a direction press made in the first frames after they open; `choose` re-reads the cursor and retries.
+- Oak's fades and screen transitions run longer than the gaps between text boxes, so `advance_text` treats text as
+  closed only after 60 quiet frames.
+- Map events can start a few frames after a step ends (Oak's event in Pallet Town), so a walk can report `arrived`
+  with a dialog appearing right after it; tool results show the screen after a short settle.
+- Red and Blue swap the preset names (RED/BLUE versus BLUE/RED).
 
 **Sandbox (bwrap)**
 
@@ -200,3 +236,7 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
   - `--bare` stays unused because it requires an API key instead of the claude.ai login.
 - **2026-11-27: Sandbox rlimits are applied inside the namespace** by a trusted entry point, because a pre-bwrap
   `RLIMIT_NPROC` counts the user's whole process tree.
+- **2026-11-27: No separate battery save files.** SameBoy's serialized state includes the cartridge RAM, so a
+  checkpoint restores the in-game save with everything else and saves cannot cross timelines.
+- **2026-11-27: Game names come from the user's ROM at runtime,** not from tables in the repository, and the walk grid
+  is computed from the map and tileset data in RAM and ROM instead of hand-written maps.

@@ -65,7 +65,8 @@ scripts/check.sh
 
 Runs ruff (lint and format), installs the pinned cores if missing, runs the test suite (including sandbox escape
 tests and the MIT-licensed [dmg-acid2](https://github.com/mattcurrie/dmg-acid2) test ROM), and fails if any ROM,
-save or state file is tracked. No game ROM is needed.
+save or state file is tracked. No game ROM is needed; with your own Red or Blue dump in `roms/` (ignored) or
+`POKEAGENT_ROM` set, the adapter tests also boot a new game and walk out of the player's house.
 
 ## Licence
 

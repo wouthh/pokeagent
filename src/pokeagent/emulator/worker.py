@@ -75,6 +75,8 @@ def serve(core: str, rom: str, options: dict[str, str]) -> None:
                     h.update(view)
             return h.hexdigest()
 
+        # SameBoy refuses to serialize until the first frame has run, so run it now: every state op then works.
+        session.run()
         av = session.core.get_system_av_info()
         info = session.core.get_system_info()
         while True:
