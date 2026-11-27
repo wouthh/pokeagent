@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS capabilities (
     kind TEXT NOT NULL CHECK (kind IN ('observation', 'macro', 'tool')),
     scope TEXT NOT NULL,
     spec TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('active', 'previous', 'retired')),
+    status TEXT NOT NULL CHECK (status IN ('staged', 'active', 'previous', 'retired')),
     run TEXT NOT NULL,
     session INTEGER,
     created REAL NOT NULL,
@@ -278,25 +278,65 @@ class Registry:
             raise CapabilityError(f"no active {kind} named {name!r}")
         return found
 
-    def define(self, kind: str, spec: dict, scope: str, session: int | None) -> dict:
-        """Store a validated spec as the new active version of its name in `scope`."""
+    def define(self, kind: str, spec: dict, scope: str, session: int | None, staged: bool = False) -> dict:
+        """Store a validated spec as the new version of its name in `scope`: active now, or `staged` until
+        `activate_staged` (a newer staged version replaces an older one)."""
         if scope not in SCOPES:
             raise CapabilityError(f"scope must be one of {', '.join(SCOPES)}")
         where = (spec["name"], self.memory.scopes[scope])
+        replaced = "staged" if staged else "active"
         with self.memory.transaction() as db:
             version = db.execute(
                 "SELECT COALESCE(MAX(version), 0) + 1 FROM capabilities WHERE name = ? AND scope = ?", where
             ).fetchone()[0]
             db.execute(
-                "UPDATE capabilities SET status = 'previous' WHERE name = ? AND scope = ? AND status = 'active'", where
+                "UPDATE capabilities SET status = ? WHERE name = ? AND scope = ? AND status = ?",
+                ("retired" if staged else "previous", *where, replaced),
             )
-            db.execute(
+            row = db.execute(
                 "INSERT INTO capabilities (name, version, kind, scope, spec, status, run, session, created)"
-                " VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)",
-                (*where[:1], version, kind, where[1], json.dumps(spec), self.memory.run, session, time.time()),
-            )
-        self.memory.event("capability_defined", {"name": spec["name"], "version": version, "kind": kind}, session)
-        return self.get(spec["name"], kind)
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    *where[:1],
+                    version,
+                    kind,
+                    where[1],
+                    json.dumps(spec),
+                    replaced,
+                    self.memory.run,
+                    session,
+                    time.time(),
+                ),
+            ).lastrowid
+        event = {"name": spec["name"], "version": version, "kind": kind, "staged": staged}
+        self.memory.event("capability_defined", event, session)
+        return self._row(row)
+
+    def _row(self, id_: int) -> dict:
+        row = dict(self.memory.rows("SELECT * FROM capabilities WHERE id = ?", id_)[0])
+        return row | {"spec": json.loads(row["spec"])}
+
+    def staged(self) -> list[dict]:
+        rows = self.memory.rows(
+            "SELECT id FROM capabilities WHERE status = 'staged' AND scope IN (?, ?) ORDER BY id", *self._scopes()
+        )
+        return [self._row(row["id"]) for row in rows]
+
+    def activate_staged(self, session: int | None = None) -> list[str]:
+        """Make every staged version this run can see active (at a session boundary, after a checkpoint)."""
+        notes = []
+        for capability in self.staged():
+            where = (capability["name"], capability["scope"])
+            with self.memory.transaction() as db:
+                db.execute(
+                    "UPDATE capabilities SET status = 'previous' WHERE name = ? AND scope = ? AND status = 'active'",
+                    where,
+                )
+                db.execute("UPDATE capabilities SET status = 'active' WHERE id = ?", (capability["id"],))
+            note = f"{capability['name']} version {capability['version']} ({capability['kind']}) is now active"
+            self.memory.event("capability_activated", {"name": capability["name"], "note": note}, session)
+            notes.append(note)
+        return notes
 
     def record(self, capability: dict, error: str | None, session: int | None) -> str | None:
         """Record one call; roll the version back after too many recent failures. Returns a note when it did."""

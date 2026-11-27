@@ -419,8 +419,10 @@ class Runner:
                 f"The user rejected the completion claim ({data['claim']}): {data['why'] or 'no reason given'}",
                 "",
             ]
-        for rolled_back in self.memory.events("capability_rollback", after=last_start):
-            lines += [rolled_back["data"]["note"], ""]
+        for kind in ("capability_rollback", "capability_activated"):
+            lines += [
+                line for event in self.memory.events(kind, after=last_start) for line in (event["data"]["note"], "")
+            ]
         lines += [
             f"This is session {number}. You have {self.budget} game actions (press, walk, walk_to, advance_text,"
             " run_macro, run_tool); every other tool is free.",
@@ -483,6 +485,10 @@ class Runner:
             started += 1
             progress["sessions"] += 1
             number = progress["sessions"]
+            if self.game.registry.staged():  # validated tools become active at a session boundary, after a checkpoint
+                self.checkpoint("before activating validated tools")
+                for note in self.game.registry.activate_staged(number):
+                    self.log("activate", note)
             session = self.server.open_session(number, self.budget)
             spec = SessionSpec(
                 brief=self.brief(number, progress),

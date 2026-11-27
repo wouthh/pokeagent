@@ -10,6 +10,7 @@ from pokeagent.capabilities import CapabilityError, Registry
 from pokeagent.emulator.client import RequestRefused
 from pokeagent.extensions import Budget, Refused, Runner, install
 from pokeagent.memory import Memory
+from pokeagent.validation import validate
 
 
 class FakeAdapter:
@@ -53,6 +54,9 @@ class FakeGame:
     def run(self, buttons, frames):
         self.frames += frames
 
+    def load_state(self, state):
+        self.x, self.money = json.loads(state)
+
     def add(self, called, body, **manifest):
         source = "def run(ctx, **params):\n" + textwrap.indent(textwrap.dedent(body), "    ")
         manifest = {"name": called, "description": f"test tool {called}"} | manifest
@@ -81,6 +85,7 @@ def test_a_tool_uses_ctx_within_its_contract(world):
         return {"from": before, "ram": ctx.read(0xC000, 2).hex(), "text": ctx.screen_text(), "refused": refused}
         """,
         params={"type": "object", "properties": {"steps": {"type": "integer"}}, "required": ["steps"]},
+        examples=[{"steps": 1}],
         returns={"type": "object", "required": ["from"]},
         postconditions={"obs": "x", "op": ">", "value": {"before": "x"}},
         effects=["position"],
@@ -206,3 +211,86 @@ def test_manifests_are_checked(world):
     tool = world.add("walker", "return 1", prefer_over="walk_to")
     assert world.registry.get("walker", "tool")["spec"]["prefer_over"] == "walk_to"
     assert (world.library / tool["spec"]["sha256"] / "tool.py").exists()
+
+
+def state(x, money=100):
+    return json.dumps([x, money]).encode()
+
+
+STEP = "def run(ctx, steps=1):\n    ctx.call('walk', steps=steps)\n    return ctx.observe('x')\n"
+TESTS = """
+def test_walks_from_the_fixture(ctx):
+    ctx.load_fixture("far")
+    assert ctx.call("step", steps=2) == 12
+
+
+def test_writes_kv(ctx):
+    ctx.kv.set("seen", True)
+"""
+PASSING = {"tool.py": STEP, "test_tool.py": "def test_ok(ctx):\n    assert True\n"}
+MANIFEST = {
+    "name": "step",
+    "description": "walk right",
+    "params": {"type": "object", "properties": {"steps": {"type": "integer", "minimum": 1}}},
+    "examples": [{}, {"steps": 3}],
+    "effects": ["position"],
+}
+
+
+def check(world, manifest=None, files=None, states=None):
+    return validate(
+        world,
+        manifest or MANIFEST,
+        {"tool.py": STEP, "test_tool.py": TESTS} if files is None else files,
+        {"far": state(10)},
+        states or [("live", state(0))],
+        "rom",
+        1,
+        {"x", "money"},
+        {"walk", "press"},
+    )
+
+
+def test_a_tool_that_passes_is_staged_until_activation(world):
+    report = check(world, states=[("live", state(0)), ("a", state(1)), ("b", state(2)), ("c", state(3))])
+    assert report["passed"] and report["version"] == 1, report
+    steps = [s["step"] for s in report["steps"]]
+    assert steps == ["manifest", "ruff", "tests", "contract on live", "contract on a", "contract on b", "contract runs"]
+    assert world.registry.active("tool") == [] and world.registry.kv({"scope": "rom:red", "name": "step"}) == {}
+    assert world.registry.activate_staged(2) == ["step version 1 (tool) is now active"]
+    assert world.registry.get("step", "tool")["version"] == 1 and world.registry.staged() == []
+    assert world.registry.memory.events("validation")[-1]["data"]["passed"]
+
+
+@pytest.mark.parametrize(
+    ("change", "failed", "detail"),
+    [
+        ({"files": {"tool.py": STEP}}, "manifest", "needs tool.py and test_tool.py"),
+        ({"files": {"tool.py": STEP + "\nundefined_name\n", "test_tool.py": TESTS}}, "ruff", "F821"),
+        (
+            {"files": {"tool.py": STEP, "test_tool.py": "def test_no(ctx):\n    assert ctx.call('step') == 9\n"}},
+            "tests",
+            "0 of 1 passed",
+        ),
+        ({"files": {"tool.py": STEP, "test_tool.py": "x = 1\n"}}, "tests", "no test_* function"),
+        # the agent's own tests pass in both cases below; the trusted contract runs fail
+        ({"manifest": MANIFEST | {"effects": []}, "files": PASSING}, "contract on live", "changed position"),
+        (
+            {"manifest": MANIFEST | {"preconditions": {"obs": "x", "op": ">=", "value": 5}}},
+            "contract runs",
+            "held in no state",
+        ),
+    ],
+)
+def test_validation_fails_on_any_step(world, change, failed, detail):
+    report = check(world, **change)
+    assert not report["passed"] and report["steps"][-1]["step"] == failed, report
+    assert detail in report["steps"][-1]["detail"] and world.registry.staged() == []
+
+
+def test_a_newer_validation_replaces_a_staged_version(world):
+    check(world)
+    check(world, manifest=MANIFEST | {"description": "walk right, v2"})
+    assert [c["version"] for c in world.registry.staged()] == [2]
+    world.registry.activate_staged()
+    assert world.registry.get("step", "tool")["spec"]["description"] == "walk right, v2"

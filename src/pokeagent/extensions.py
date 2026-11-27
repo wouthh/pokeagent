@@ -42,6 +42,7 @@ STORE_LIMIT = 64 << 10  # bytes of JSON per kv or tkv namespace
 MAX_LOG = 50  # ctx.log lines kept per call
 MAX_DEPTH = 4
 MAX_SOURCE = 64 << 10
+MAX_EXAMPLES = 5
 
 
 class Refused(CapabilityError):
@@ -60,8 +61,8 @@ class Budget:
     logs: list[str] = field(default_factory=list)
 
     @classmethod
-    def start(cls, game) -> "Budget":
-        budget = cls()
+    def start(cls, game, **limits) -> "Budget":
+        budget = cls(**limits)
         budget.deadline, budget.frame_end = time.monotonic() + budget.seconds, game.frames + budget.frames
         return budget
 
@@ -73,7 +74,7 @@ def check_manifest(manifest: dict, observations: set[str], tools: set[str], take
     """Validate a manifest; return it normalised. `observations` are the names conditions may use, `tools` the
     capabilities it may require."""
     allowed = {"name", "description", "params", "returns", "limitations", "compatibility", "requires"}
-    allowed |= {"preconditions", "postconditions", "invariants", "effects", "prefer_over", "api_version"}
+    allowed |= {"preconditions", "postconditions", "invariants", "effects", "prefer_over", "api_version", "examples"}
     capabilities._fields(manifest, allowed)
     out = {"name": capabilities._name(manifest, taken), "description": capabilities._description(manifest)}
     for key in ("params", "returns"):
@@ -108,7 +109,16 @@ def check_manifest(manifest: dict, observations: set[str], tools: set[str], take
     prefer = manifest.get("prefer_over")
     if prefer is not None and prefer not in capabilities.ACTIONS[:-1]:
         raise CapabilityError(f"prefer_over names a builtin action: {', '.join(capabilities.ACTIONS[:-1])}")
+    examples = manifest.get("examples", [{}])
+    if not isinstance(examples, list) or not 1 <= len(examples) <= MAX_EXAMPLES:
+        raise CapabilityError(f"examples is a list of 1-{MAX_EXAMPLES} argument sets for the validation runs")
+    for example in examples:
+        try:
+            jsonschema.validate(example, out["params"])
+        except jsonschema.ValidationError as e:
+            raise CapabilityError(f"example {example!r} does not match params: {e.message}") from None
     return out | {
+        "examples": examples,
         "limitations": limitations,
         "compatibility": compatibility,
         "requires": requires,
@@ -174,10 +184,18 @@ def store(library: Path, source: str) -> str:
 
 class Runner:
     """Runs tools on one game, holding its lock. `game` provides the adapter, `_do`, `run`, `frames`,
-    `_observations`, `registry`, `emu`, `library` and `tkv` (the timeline store's path)."""
+    `_observations`, `registry`, `emu`, `library` and `tkv` (the timeline store's path). `fixtures` (name -> state)
+    are served to the agent's tests during validation only."""
 
-    def __init__(self, game):
-        self.game = game
+    def __init__(self, game, fixtures: dict[str, bytes] | None = None):
+        self.game, self.fixtures = game, fixtures
+
+    def run_tests(self, capability: dict, folder: Path, budget: Budget) -> list[dict]:
+        """Run the agent's own tests (folder/test_tool.py) in the sandbox; return one result per test."""
+        results = self._host(capability, folder, ["--tests"], budget, 0)
+        if not isinstance(results, list):
+            raise CapabilityError("the test run broke the protocol")
+        return results
 
     def call(self, capability: dict, args: dict, budget: Budget | None = None, depth: int = 0):
         """Run one tool call; return its result. Refused, CapabilityError (a failure) or a game error."""
@@ -209,11 +227,14 @@ class Runner:
         return result
 
     def _run_host(self, capability: dict, args: dict, budget: Budget, depth: int):
+        folder = self.game.library / capability["spec"]["sha256"]
+        return self._host(capability, folder, [json.dumps(args)], budget, depth)
+
+    def _host(self, capability: dict, folder: Path, argv: list[str], budget: Budget, depth: int):
         spec = capability["spec"]
-        folder = self.game.library / spec["sha256"]
         proc = sandbox.spawn(
             "pokeagent.extension_host",
-            [json.dumps(args)],
+            argv,
             {"/ext": folder},
             LIMITS,
             stdin=subprocess.PIPE,
@@ -261,6 +282,11 @@ class Runner:
                     return game.emu.read(args["address"], length).hex()
                 except RequestRefused as e:
                     raise ValueError(str(e)) from None
+            case "load_fixture":
+                if self.fixtures is None or args.get("name") not in self.fixtures:
+                    raise ValueError(f"no fixture named {args.get('name')!r}; fixtures exist only in validation tests")
+                game.emu.load_state(self.fixtures[args["name"]])
+                return None
             case "log":
                 if len(budget.logs) < MAX_LOG:
                     budget.logs.append(f"{spec['name']}: {str(args.get('message'))[:500]}")
