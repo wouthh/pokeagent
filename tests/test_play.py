@@ -11,6 +11,7 @@ from pokeagent.agents.claude_cli import ProviderError, SessionResult
 from pokeagent.capabilities import Registry, check_macro, check_observation
 from pokeagent.emulator.client import Emulator, EmulatorError
 from pokeagent.emulator.cores import core_path
+from pokeagent.extensions import install
 from pokeagent.games.pokemon_gen1 import CORE, CORE_OPTIONS, DEFAULT_CHECK, HALL_OF_FAME, OBSERVATIONS
 from pokeagent.memory import Memory
 from pokeagent.play import Game, Runner, latest_state, new_run, play, restorable, restore, run_lock
@@ -251,6 +252,35 @@ def test_observations_and_macros_on_the_rom(game, tmp_path):
     assert "Now: Reds House 2F" in text and macro["name"] == "nowhere"
 
 
+def test_tools_on_the_rom(game, tmp_path):
+    gen1, emu, bedroom = game
+    emu.load_state(bedroom)
+    memory = Memory(tmp_path / "memory.db", "run")
+    memory.open_run({"objective": "x", "rom_sha1": "red", "family": "pokemon-gen1"})
+    live = Game(emu, gen1, registry=Registry(memory), library=tmp_path / "library", tkv=tmp_path / "tkv.json")
+    x = live.observations()["x"]
+    source = (
+        "def run(ctx):\n    ctx.call('walk', direction='right')\n    ctx.log('moved')\n    return ctx.observe('x')\n"
+    )
+    names = set(OBSERVATIONS)
+    install(
+        live.registry,
+        live.library,
+        {"name": "step", "description": "d", "effects": ["position"]},
+        source,
+        "rom",
+        1,
+        names,
+        set(),
+    )
+    text, _, _, error = live.run_tool("step", {})
+    assert error is None and text.startswith(f"run_tool step: returned {x + 1}\nIts log:\n  step: moved")
+    install(live.registry, live.library, {"name": "sneaky", "description": "d"}, source, "rom", 1, names, set())
+    text, _, _, error = live.run_tool("sneaky", {})
+    assert "changed position, which its effects do not declare" in error and "Now: Reds House 2F" in text
+    assert live.observations()["x"] == x + 2  # a failed call keeps its effect on the game
+
+
 def test_a_relative_run_dir_becomes_absolute(tmp_path, monkeypatch):
     runner, _, _ = make_runner(tmp_path, [])
     monkeypatch.chdir(tmp_path)
@@ -352,6 +382,8 @@ def test_restore_branches_a_timeline_and_the_brief_says_what_changed(tmp_path):
     notes, progress = run_dir / "notes.md", run_dir / "state.json"
     notes.write_text("go to Viridian\nthe Mart has the parcel\n")
     progress.write_text(json.dumps({"sessions": 1, "summary": "left Pallet", "next_focus": "the Mart"}))
+    tkv = run_dir / "tkv.json"  # the tools' timeline store
+    tkv.write_text('{"router": {"parcel": "at the Mart"}}')
     runner.checkpoint("session 1")
     checkpoint = restorable(run_dir, memory)[-1]["data"]["file"]
     first = memory.timeline()
@@ -361,6 +393,7 @@ def test_restore_branches_a_timeline_and_the_brief_says_what_changed(tmp_path):
     delivered = memory.add_knowledge("progress", "Parcel", "delivered", scope="run")
     notes.write_text("go to Viridian\nOak gave me the Pokédex\n")
     progress.write_text(json.dumps({"sessions": 4, "summary": "delivered the parcel", "next_focus": "Route 2"}))
+    tkv.write_text('{"router": {"parcel": "delivered"}}')
     runner.checkpoint("session 4")
 
     memory.set_status("complete", "done")
@@ -369,6 +402,7 @@ def test_restore_branches_a_timeline_and_the_brief_says_what_changed(tmp_path):
     assert done["undone_actions"] == 3 and done["stale"] == [delivered]
     assert latest_state(run_dir) == b"state 1" and notes.read_text() == "go to Viridian\nthe Mart has the parcel\n"
     assert json.loads(progress.read_text()) == {"sessions": 4, "summary": "left Pallet", "next_focus": "the Mart"}
+    assert json.loads(tkv.read_text()) == {"router": {"parcel": "at the Mart"}}
     assert memory.timeline() != first and [e["data"]["reason"] for e in restorable(run_dir, memory)] == ["session 1"]
     with pytest.raises(ValueError, match="not a saved checkpoint"):  # the undone part is not in this history
         restore(run_dir, memory, sorted((run_dir / "checkpoints").glob("*.state"))[-1].name)

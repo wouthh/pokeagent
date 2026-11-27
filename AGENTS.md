@@ -21,7 +21,8 @@ first use case, not an architectural constraint. Design and decisions: [docs/arc
   - `memory.py`: the SQLite store (runs, success checks, timelines, events, knowledge with FTS5) whose triggers
     keep objectives, checks and events immutable. `objectives.py`: the check grammar, judging and claims.
   - `capabilities.py`: the agent's declarative observations and macros (validation, interpreter, versioned
-    registry with rollback).
+    registry with rollback). `extensions.py`: code extensions (manifests, content-addressed library, the
+    contract-enforcing runner serving `ctx`); `extension_host.py` runs one inside the sandbox.
   - `agents/claude_cli.py`: the Claude CLI provider (preflight, isolated argv, fail-closed `init` check, stream
     parsing, end classification). `webhook.py`: the `pokeagent hook web` policy for WebFetch/WebSearch.
 - `tests/`: pytest suite; runs without any game ROM. `tests/fixtures/` holds the MIT dmg-acid2 test ROM, its
