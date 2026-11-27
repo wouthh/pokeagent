@@ -200,6 +200,23 @@ def test_a_development_request_runs_a_develop_session_within_the_policy(tmp_path
     ]
 
 
+def test_a_run_that_succeeded_during_play_skips_its_development_request(tmp_path):
+    runner, briefs, _ = make_runner(tmp_path, [(SessionResult("completed"), None)])
+    runner.bench_class, runner.dev_attempts, runner.server.dev_url = FakeBench, 1, "http://127.0.0.1:2/mcp"
+    replay, modes = runner.provider, []
+
+    def scripted(spec, on_event):
+        session = runner.server.sessions[spec.token]
+        modes.append(session.mode)
+        runner.game.map_id = HALL_OF_FAME  # the authoritative check now holds
+        ask = {"tool": "step", "evidence": [], "problem": "p", "expected_benefit": "b", "proposal": "q"}
+        session.request = runner.memory.event("development_requested", ask, session.number)
+        return replay(spec, on_event)
+
+    runner.provider = scripted
+    assert runner.loop("http://127.0.0.1:1/mcp") == "complete" and len(briefs) == 1 and modes == ["play"]
+
+
 def test_the_check_waits_for_a_game_in_progress(tmp_path):
     # Power-on RAM is noise: a map id that happens to equal the Hall of Fame must not complete the run.
     runner, briefs, _ = make_runner(tmp_path, [(SessionResult("completed"), None)], map_id=HALL_OF_FAME, in_game=False)
