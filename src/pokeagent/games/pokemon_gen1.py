@@ -453,7 +453,8 @@ class Gen1:
             taken += 1
             if outcome != "moved":
                 return {"outcome": outcome, "steps": taken}
-        return {"outcome": "step_limit", "steps": taken}
+        arrived = self._position(emu)[1:] == (x, y)
+        return {"outcome": "arrived" if arrived else "step_limit", "steps": taken}
 
     def choose(self, emu: Emulator, label: str, max_moves: int = 12) -> bool:
         """Move the menu cursor up/down to the entry whose text starts with `label`, then press A."""

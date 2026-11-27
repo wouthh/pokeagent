@@ -113,7 +113,9 @@ def test_walks_downstairs_and_out_of_the_house(game):
     grid = gen1.grid(emu)
     assert (5, 4) in grid.sprites  # Mom
     door = max(grid.warps, key=lambda w: w[1])
-    assert gen1.walk_to(emu, *door)["outcome"] == "arrived"
+    _, px, py = gen1._position(emu)
+    need = len(grid.path((px, py), door))
+    assert gen1.walk_to(emu, *door, max_steps=need)["outcome"] == "arrived"  # the last permitted step counts
     assert gen1.walk(emu, "down", 1)["outcome"] == "map_changed"
     state = gen1.state(emu)
     assert state["map"] == "Pallet Town" and state["screen"]["mode"] == "overworld"
