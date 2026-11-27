@@ -435,12 +435,12 @@ dependencies = [
     { name = "libretro-py" },
     { name = "mcp" },
     { name = "pillow" },
+    { name = "ruff" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
-    { name = "ruff" },
 ]
 
 [package.metadata]
@@ -449,13 +449,11 @@ requires-dist = [
     { name = "libretro-py", specifier = "==0.12.0" },
     { name = "mcp", specifier = ">=2.3,<3" },
     { name = "pillow", specifier = ">=11" },
+    { name = "ruff", specifier = ">=0.12" },
 ]
 
 [package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=8.3" },
-    { name = "ruff", specifier = ">=0.12" },
-]
+dev = [{ name = "pytest", specifier = ">=8.3" }]
 
 [[package]]
 name = "pycparser"

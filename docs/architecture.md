@@ -213,7 +213,7 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
   - the next brief says when the checkpoint was saved, how many actions were undone, which entries went stale and
     which note lines were dropped.
 
-## Capabilities *(declarative implemented, phase 6a; code extension runtime, phase 6b; validation and develop mode planned)*
+## Capabilities *(declarative, phase 6a; code extensions with contracts and validation, phase 6b; develop mode planned)*
 
 - **Builtin:** `get_state`, `press`, `walk_to(x, y)` (whole-map grid), `walk`, `advance_text` (stops at prompts).
 - **Declarative** (`capabilities.py`): plain data that trusted code validates and interprets; no agent code runs.
@@ -248,8 +248,8 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
   - *Manifest:* name, description, `params` and `returns` (JSON schemas), `limitations`, `compatibility` (family,
     optional ROM sha1s), `requires`, `preconditions`, `invariants` and `postconditions` (conditions; only
     postconditions may compare with `{"before": obs}`), `effects` (fingerprint groups: position, map, party, bag,
-    money, battle, menu), `prefer_over` (a builtin action the brief says to use it instead of; the builtin stays)
-    and `api_version` 1.
+    money, battle, menu), `prefer_over` (a builtin action the brief says to use it instead of; the builtin stays),
+    `examples` (1-5 argument sets for the validation runs; default `{}`) and `api_version` 1.
   - *Storage:* `<data dir>/library/<sha256>/tool.py`, content-addressed, so a version's code never changes.
   - *Host:* each call spawns `extension_host` in bubblewrap with only that folder mounted at `/ext` (read-only), no
     ROM, no network, no home, a tmpfs `/tmp` and rlimits (1 GiB address space, 16 processes, 120 s CPU). It talks
@@ -268,8 +268,17 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
     failed nested call) is an error the tool may catch; a budget, depth, invariant or protocol violation ends the
     call. Failures count like failed macro calls and roll a version back.
   - *Play:* `run_tool(name, args)` is one action; the result, the tool's log and the state are reported like a
-    macro's. `extensions.install` checks a manifest, stores the code and activates it; validation (several states,
-    the agent's own tests with fixtures) and develop mode, which will call it, come next.
+    macro's.
+  - *Validation* (`validation.py`, orchestrator-owned; the agent can ask for one but not change it): the manifest;
+    ruff's syntax and undefined-name checks on `tool.py` and `test_tool.py` (ruff only reads them); the agent's
+    tests (`test_*(ctx)`, which may `ctx.load_fixture(name)`) in the sandbox; then trusted contract runs of every
+    example on up to three states (the live state first, then fixtures and earlier checkpoints) where the
+    preconditions hold. At least one state must run and none may fail, so the agent's tests alone never pass a
+    tool. It runs on its own emulator with scratch `kv` and `tkv`, so it changes nothing the run keeps. The
+    report is a `validation` event.
+  - *Activation:* a tool that passes is staged (a newer validation replaces a staged version); at the next session
+    start the runner takes a checkpoint, activates every staged version and the brief says so.
+    `extensions.install` (check, store, activate at once) remains for trusted callers and tests.
 
 ## Verified facts
 
@@ -441,3 +450,7 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
 - **2026-11-27: No separate soft-lock invariant for tools yet.** Declared effects already fail a call that leaves a
   menu or dialog open; a game that stops responding is left to the stuck ladder (phase 7), which sees repeated
   fingerprints whatever caused them.
+- **2026-11-27: ruff is a runtime dependency,** because validation lints agent code wherever pokeagent runs; it
+  only reads the files, so it runs outside the sandbox.
+- **2026-11-27: A tool's manifest carries its validation `examples`.** The contract runs need arguments, and the
+  author of the tool is the one who knows sensible ones; each is checked against `params` first.

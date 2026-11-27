@@ -81,6 +81,24 @@ class Ctx:
     def log(self, message: str) -> None:
         self._request("log", message=str(message))
 
+    def load_fixture(self, name: str) -> None:
+        """In tests only: put the validation game into a saved fixture state."""
+        self._request("load_fixture", name=name)
+
+
+def _run_tests(ctx: Ctx) -> list[dict]:
+    """Every test_* function of /ext/test_tool.py, called with ctx, in definition order."""
+    tests = runpy.run_path("/ext/test_tool.py")
+    results = []
+    for name, test in tests.items():
+        if name.startswith("test_") and callable(test):
+            try:
+                test(ctx)
+                results.append({"test": name, "passed": True})
+            except Exception as e:
+                results.append({"test": name, "passed": False, "error": f"{type(e).__name__}: {e}"[:500]})
+    return results
+
 
 def main() -> None:
     proto = os.fdopen(os.dup(1), "w", buffering=1)
@@ -98,8 +116,10 @@ def main() -> None:
         return reply.get("result")
 
     try:
-        run = runpy.run_path("/ext/tool.py")["run"]
-        result = run(Ctx(request), **json.loads(sys.argv[1]))
+        if sys.argv[1:2] == ["--tests"]:
+            result = _run_tests(Ctx(request))
+        else:
+            result = runpy.run_path("/ext/tool.py")["run"](Ctx(request), **json.loads(sys.argv[1]))
         send({"done": True, "result": result})
     except BaseException as e:  # the extension's own failure, reported as its outcome
         send({"done": False, "error": f"{type(e).__name__}: {e}"[:2000]})

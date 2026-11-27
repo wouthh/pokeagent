@@ -16,6 +16,7 @@ from pokeagent.games.pokemon_gen1 import CORE, CORE_OPTIONS, DEFAULT_CHECK, HALL
 from pokeagent.memory import Memory
 from pokeagent.play import Game, Runner, latest_state, new_run, play, restorable, restore, run_lock
 from pokeagent.server import GameServer
+from pokeagent.validation import validate
 
 
 class FakeGame:
@@ -137,6 +138,16 @@ def test_the_brief_carries_knowledge_and_a_generated_summary(tmp_path):
     assert "spin version 2 was rolled back (it kept failing); version 1 is active again" in briefs[1]
     assert "spin (macro v1, rom; no params; unused): turn around" in briefs[1]
     assert [e["data"]["actions"] for e in memory.events("session_end")] == [2, 2]
+
+
+def test_staged_tools_become_active_at_the_next_session_after_a_checkpoint(tmp_path):
+    runner, briefs, _ = make_runner(tmp_path, [(SessionResult("completed"), None)])
+    spec = {"name": "step", "description": "walk right", "params": {"type": "object"}, "sha256": "0" * 64}
+    runner.game.registry.define("tool", spec, "rom", None, staged=True)
+    assert runner.loop("url", max_sessions=1) == "max_sessions"
+    assert runner.game.registry.get("step", "tool")["status"] == "active"
+    assert "step version 1 (tool) is now active" in briefs[0]
+    assert runner.memory.events("checkpoint")[0]["data"]["reason"] == "before activating validated tools"
 
 
 def test_the_check_waits_for_a_game_in_progress(tmp_path):
@@ -279,6 +290,23 @@ def test_tools_on_the_rom(game, tmp_path):
     text, _, _, error = live.run_tool("sneaky", {})
     assert "changed position, which its effects do not declare" in error and "Now: Reds House 2F" in text
     assert live.observations()["x"] == x + 2  # a failed call keeps its effect on the game
+
+
+def test_a_tool_validates_on_the_rom(game, tmp_path):
+    gen1, emu, bedroom = game
+    memory = Memory(tmp_path / "memory.db", "run")
+    memory.open_run({"objective": "x", "rom_sha1": "red", "family": "pokemon-gen1"})
+    trial = Game(emu, gen1, registry=Registry(memory), library=tmp_path / "library", tkv=tmp_path / "tkv.json")
+    files = {
+        "tool.py": "def run(ctx):\n    ctx.call('walk', direction='right')\n    return ctx.observe('x')\n",
+        "test_tool.py": "def test_moves(ctx):\n    ctx.load_fixture('bedroom')\n"
+        "    x = ctx.observe('x')\n    assert ctx.call('step') == x + 1\n",
+    }
+    manifest = {"name": "step", "description": "one step right", "effects": ["position"]}
+    names = set(OBSERVATIONS)
+    report = validate(trial, manifest, files, {"bedroom": bedroom}, [("live", bedroom)], "rom", 1, names, set())
+    assert report["passed"], report
+    assert [s["step"] for s in report["steps"]][-2:] == ["contract on live", "contract runs"]
 
 
 def test_a_relative_run_dir_becomes_absolute(tmp_path, monkeypatch):
