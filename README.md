@@ -57,6 +57,8 @@ uv run pokeagent play --rom /path/to/your/red.gb --objective "Get the first badg
 uv run pokeagent resume 20261127-170000 --watch               # continue a run where it stopped
 uv run pokeagent restore 20261127-170000                      # list the checkpoints a stopped run can go back to
 uv run pokeagent restore 20261127-170000 1764263000000000000.state  # go back; learned knowledge stays
+uv run pokeagent status 20261127-170000                       # where a run stands
+uv run pokeagent stats 20261127-170000 --compare 20261201-090000  # per-session metrics, compared at milestones
 uv run pokeagent capability list 20261127-170000              # the observations, macros and tools it defined
 uv run pokeagent capability rollback 20261127-170000 heal     # take one back to its previous version
 ```

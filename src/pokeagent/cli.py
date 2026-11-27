@@ -53,6 +53,12 @@ def build_parser() -> argparse.ArgumentParser:
     capability.add_argument("run", help="run id or run folder")
     capability.add_argument("name", nargs="?", help="for rollback: the capability to take back to its previous version")
     capability.add_argument("--data-dir", type=Path, help="where runs live (default ~/.local/share/pokeagent)")
+    status = commands.add_parser("status", help="where a run stands")
+    stats = commands.add_parser("stats", help="per-session metrics of a run, optionally compared with another")
+    stats.add_argument("--compare", metavar="RUN", help="another run of the same data dir, compared at milestones")
+    for p in (status, stats):
+        p.add_argument("run", help="run id or run folder")
+        p.add_argument("--data-dir", type=Path, help="where runs live (default ~/.local/share/pokeagent)")
     hook = commands.add_parser("hook", help="hooks called by Claude sessions (internal)")
     hook.add_argument("kind", choices=["web"])
     hook.add_argument("--log", type=Path, required=True)
@@ -163,6 +169,24 @@ def main(argv: list[str] | None = None) -> int:
             print(f"pokeagent: {e}", file=sys.stderr)
             return 1
         print(f"run {run_dir.name} stopped: {reason}")
+    elif args.command in ("status", "stats"):
+        from pokeagent import play, stats
+
+        try:
+            run_dir, data_dir = find_run(args.run, args.data_dir)
+            with contextlib.closing(play.open_memory(run_dir, data_dir)) as memory:
+                if args.command == "status":
+                    print(stats.status(memory, run_dir))
+                else:
+                    print(stats.report(memory))
+                    if args.compare:
+                        other_dir, _ = find_run(args.compare, data_dir)
+                        with contextlib.closing(play.open_memory(other_dir, data_dir)) as other:
+                            print()
+                            print(stats.compare(memory, other))
+        except (OSError, ValueError) as e:
+            print(f"pokeagent: {e}", file=sys.stderr)
+            return 1
     elif args.command == "hook":
         from pokeagent import webhook
 

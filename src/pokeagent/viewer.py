@@ -1,7 +1,8 @@
-"""Live viewer: a Tk window with the latest frame and a status line, on its own thread.
+"""Live viewer: a Tk window with the latest frame, a status line and a run panel, on its own thread.
 
-The game sets `frame` and `status`; the window polls them. Closing the window stops watching, not the run; Ctrl-C in
-the terminal stops the run (SIGINT is blocked on this thread so it reaches the main thread).
+The game sets `frame` and `status` (the last action), the runner `panel` (`stats.status`); the window polls them.
+Closing the window stops watching, not the run; Ctrl-C in the terminal stops the run (SIGINT is blocked on this
+thread so it reaches the main thread).
 """
 
 import signal
@@ -15,6 +16,7 @@ class Viewer:
     def __init__(self, scale: int = 3):
         self.frame: Image.Image | None = None
         self.status = ""
+        self.panel = ""
         self._error: Exception | None = None
         ready = threading.Event()
         threading.Thread(target=self._run, args=(scale, ready), daemon=True).start()
@@ -36,10 +38,12 @@ class Viewer:
         picture.pack()
         status = tkinter.Label(root, anchor="w", justify="left", font="TkFixedFont", wraplength=160 * scale)
         status.pack(fill="x")
-        shown: list = [None, None]
+        panel = tkinter.Label(root, anchor="nw", justify="left", font="TkFixedFont", wraplength=160 * scale)
+        panel.pack(fill="both", expand=True)
+        shown: list = [None, None, None]
 
         def tick() -> None:
-            frame, text = self.frame, self.status
+            frame, text, summary = self.frame, self.status, self.panel
             if frame is not None and frame is not shown[0]:
                 photo = ImageTk.PhotoImage(frame.resize((frame.width * scale, frame.height * scale), Image.NEAREST))
                 picture.configure(image=photo, width=0, height=0)
@@ -48,6 +52,9 @@ class Viewer:
             if text != shown[1]:
                 status.configure(text=text)
                 shown[1] = text
+            if summary != shown[2]:
+                panel.configure(text=summary)
+                shown[2] = summary
             root.after(33, tick)
 
         tick()

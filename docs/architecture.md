@@ -140,6 +140,21 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
 
   Progress resets the ladder. It is not saved, so a resumed run starts it over.
 
+## Metrics *(implemented, phase 7c)*
+
+`stats.py` reads everything from events; nothing is counted twice or kept elsewhere.
+
+- `pokeagent status RUN`: state, objective and checks, play and develop sessions with actions, tokens and cost, the
+  timeline, the planned focus, the last five milestones, the last stuck notice, the active capabilities (newest
+  first), recent knowledge and the last development cycle. The `--watch` window shows the same text in a panel
+  under the frame, refreshed at session starts and ends, milestones and stuck notices.
+- `pokeagent stats RUN`: one row per session (mode, end, turns, actions, capability calls and failures, milestones,
+  tokens, cache reads, cost, minutes), totals per mode and the development share of tokens.
+- `pokeagent stats RUN --compare RUN2`: for every milestone both runs reached (by its text, such as `badge 1` or
+  `first visit to Pewter City`), the session, actions, tokens, cost and minutes each run needed to first reach it.
+  Minutes leave out usage limit waits (`limit_wait` events). The CLI reports usage only at a session's end, so a
+  milestone is charged its whole session's tokens and cost.
+
 ## Isolation and permissions *(sandbox, Claude provider and web hook implemented; the rest planned)*
 
 - `sandbox.ensure()` runs the probe once per process and raises `SandboxError` unless all of these hold:
