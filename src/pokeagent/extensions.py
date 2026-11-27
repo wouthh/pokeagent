@@ -316,7 +316,8 @@ class Runner:
 
     def _act(self, method: str, args: dict, budget: Budget, depth: int):
         game = self.game
-        self._spend(budget, _cost(method, args))
+        if method != "call":
+            self._spend(budget, _cost(method, args))
         match method:
             case "press":
                 return game._do("press", {"button": args.get("button"), "times": args.get("times", 1)})
@@ -329,6 +330,10 @@ class Runner:
                 game.run(buttons, frames)
                 return None
         name, call_args = args.get("name"), args.get("args", {})
+        if name in capabilities.ACTIONS[:-1] and isinstance(call_args, dict):
+            self._spend(budget, _cost(name, call_args))  # a builtin costs its own input count
+        else:
+            self._spend(budget, 1)
         if not isinstance(call_args, dict):
             raise ValueError("args must be an object")
         if depth + 1 > MAX_DEPTH:

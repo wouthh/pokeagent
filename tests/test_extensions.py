@@ -127,6 +127,7 @@ def test_calls_are_refused_before_they_run(world):
             "invariant failed",
         ),
         ("for _ in range(700): ctx.press('a')", {}, "inputs is used up"),
+        ("ctx.call('press', button='a', times=700)", {}, "inputs is used up"),
         ("while True: pass", {}, "ran out of time"),
         ("x = bytearray(2 << 30)", {}, "failed: MemoryError"),
     ],
