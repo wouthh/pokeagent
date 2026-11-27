@@ -79,7 +79,7 @@ class Emulator:
         return self._call("read", addr=addr, n_bytes=n)[1]
 
     def ram_hash(self) -> str:
-        """sha256 of system RAM plus save RAM, used to verify replays."""
+        """sha256 of system RAM plus all of save RAM (every bank), e.g. to check that a state restores the save."""
         return self._call("ram_hash")[0]["sha256"]
 
     def save_state(self) -> bytes:

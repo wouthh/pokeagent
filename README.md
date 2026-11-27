@@ -54,7 +54,9 @@ user namespaces are disabled), pokeagent refuses to start rather than running un
 uv run pokeagent play --rom /path/to/your/red.gb --watch      # new run towards the default objective
 uv run pokeagent play --rom /path/to/your/red.gb --objective "Get the first badge" \
   --success '{"obs": "badges", "op": ">=", "value": 1}'           # your own check completes the run
-uv run pokeagent resume 20261127-170000 --watch               # continue a run from its latest checkpoint
+uv run pokeagent resume 20261127-170000 --watch               # continue a run where it stopped
+uv run pokeagent restore 20261127-170000                      # list the checkpoints a stopped run can go back to
+uv run pokeagent restore 20261127-170000 1764263000000000000.state  # go back; learned knowledge stays
 ```
 
 Each run lives in `~/.local/share/pokeagent/runs/<id>/`: `play.log` shows every message and action, `notes.md` the

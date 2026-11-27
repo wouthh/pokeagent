@@ -6,16 +6,15 @@ import pytest
 
 from pokeagent import objectives
 from pokeagent.agents.claude_cli import ProviderError, SessionResult
-from pokeagent.games.pokemon_gen1 import DEFAULT_CHECK, HALL_OF_FAME
+from pokeagent.emulator.client import Emulator
+from pokeagent.emulator.cores import core_path
+from pokeagent.games.pokemon_gen1 import CORE, CORE_OPTIONS, DEFAULT_CHECK, HALL_OF_FAME
 from pokeagent.memory import Memory
-from pokeagent.play import Game, Runner, new_run, play
+from pokeagent.play import Game, Runner, latest_state, new_run, play, restorable, restore, run_lock
 from pokeagent.server import GameServer
 
 
 class FakeGame:
-    def __init__(self, map_id=0, in_game=True):
-        self.map_id, self.in_game = map_id, in_game
-
     def state_text(self):
         return f"on map {self.map_id}"
 
@@ -25,8 +24,15 @@ class FakeGame:
     def location(self):
         return "Pallet Town"
 
+    def __init__(self, map_id=0, in_game=True):
+        self.map_id, self.in_game, self.saves, self.restarts = map_id, in_game, 0, []
+
     def save_state(self):
-        return b"state"
+        self.saves += 1
+        return f"state {self.saves}".encode()
+
+    def restart(self, state):
+        self.restarts.append(state)
 
 
 def make_runner(tmp_path, results, objective=None, map_id=0, in_game=True):
@@ -38,6 +44,8 @@ def make_runner(tmp_path, results, objective=None, map_id=0, in_game=True):
         "check": None if objective else DEFAULT_CHECK,
         "rom_sha1": "red",
         "family": "pokemon-gen1",
+        "core": "sameboy",
+        "core_options": {"sameboy_model": "Game Boy"},
     }
     (run_dir / "run.json").write_text(json.dumps(meta))
     game = FakeGame(map_id, in_game)
@@ -171,32 +179,6 @@ def test_game_actions_on_the_rom(game):
         live.act("press", button="turbo", times=1)
 
 
-def test_resume_restores_the_notes_and_progress_saved_with_the_checkpoint(tmp_path):
-    runner, _, _ = make_runner(tmp_path, [])
-    notes, state = runner.run_dir / "notes.md", runner.run_dir / "state.json"
-    notes.write_text("old notes")
-    state.write_text('{"sessions": 1}')
-    runner.checkpoint("a")
-    notes.write_text("notes from a lost timeline")
-    state.write_text('{"sessions": 2}')
-    runner.restore_context(sorted((runner.run_dir / "checkpoints").glob("*.state"))[-1])
-    assert notes.read_text() == "old notes" and state.read_text() == '{"sessions": 1}'
-    for i in range(12):
-        runner.checkpoint(str(i))
-    folder = runner.run_dir / "checkpoints"
-    assert len(list(folder.glob("*.notes.md"))) == len(list(folder.glob("*.state"))) == 10
-
-
-def test_restore_marks_earlier_actions_as_a_discarded_attempt(tmp_path):
-    runner, _, _ = make_runner(tmp_path, [])
-    runner.checkpoint("a")
-    runner.memory.event("action", {"outcome": "lost parcel"}, 1)
-    runner.restore_context(sorted((runner.run_dir / "checkpoints").glob("*.state"))[-1])
-    runner.memory.event("action", {"outcome": "kept"}, 1)
-    after = runner.memory.events("restore", limit=1)[0]["id"]
-    assert [e["data"]["outcome"] for e in runner.memory.events("action", session=1, after=after)] == ["kept"]
-
-
 def test_a_relative_run_dir_becomes_absolute(tmp_path, monkeypatch):
     runner, _, _ = make_runner(tmp_path, [])
     monkeypatch.chdir(tmp_path)
@@ -221,9 +203,72 @@ def test_new_runs_record_their_checks_and_settled_runs_do_not_resume(rom_path, t
         play(run_dir, tmp_path / "b")
 
 
-def test_power_on_restore_drops_notes_and_marks_a_discarded_attempt(tmp_path):
+def test_every_action_saves_the_recovery_state_and_a_restart_loads_it(tmp_path):
     runner, _, _ = make_runner(tmp_path, [])
-    (runner.run_dir / "notes.md").write_text("lost notes")
-    runner.restore_context(None)
-    assert not (runner.run_dir / "notes.md").exists()
-    assert runner.memory.events("restore", limit=1)[0]["data"] == {"file": None}
+    assert latest_state(runner.run_dir) is None  # power-on
+    runner.checkpoint("start")
+    assert latest_state(runner.run_dir) == b"state 1"
+    runner.server.after_action()
+    assert latest_state(runner.run_dir) == b"state 2"
+    assert [runner.recover("worker exited") for _ in range(4)] == [True, True, True, False]
+    assert runner.game.restarts == [b"state 2"] * 3 and len(runner.memory.events("restart")) == 3
+
+
+def test_restore_branches_a_timeline_and_the_brief_says_what_changed(tmp_path):
+    runner, briefs, _ = make_runner(tmp_path, [(SessionResult("completed"), None)])
+    memory, run_dir = runner.memory, runner.run_dir
+    notes, progress = run_dir / "notes.md", run_dir / "state.json"
+    notes.write_text("go to Viridian\nthe Mart has the parcel\n")
+    progress.write_text(json.dumps({"sessions": 1, "summary": "left Pallet", "next_focus": "the Mart"}))
+    runner.checkpoint("session 1")
+    checkpoint = restorable(run_dir, memory)[-1]["data"]["file"]
+    first = memory.timeline()
+    for _ in range(3):
+        runner.server.after_action()
+        memory.event("action", {"outcome": "walk: moved"}, 2)
+    delivered = memory.add_knowledge("progress", "Parcel", "delivered", scope="run")
+    notes.write_text("go to Viridian\nOak gave me the Pokédex\n")
+    progress.write_text(json.dumps({"sessions": 4, "summary": "delivered the parcel", "next_focus": "Route 2"}))
+    runner.checkpoint("session 4")
+
+    done = restore(run_dir, memory, checkpoint)
+    assert done["undone_actions"] == 3 and done["stale"] == [delivered]
+    assert latest_state(run_dir) == b"state 1" and notes.read_text() == "go to Viridian\nthe Mart has the parcel\n"
+    assert json.loads(progress.read_text()) == {"sessions": 4, "summary": "left Pallet", "next_focus": "the Mart"}
+    assert memory.timeline() != first and [e["data"]["reason"] for e in restorable(run_dir, memory)] == ["session 1"]
+    with pytest.raises(ValueError, match="not a saved checkpoint"):  # the undone part is not in this history
+        restore(run_dir, memory, sorted((run_dir / "checkpoints").glob("*.state"))[-1].name)
+    assert runner.loop("url", max_sessions=1) == "max_sessions"
+    assert "restored to the checkpoint saved" in briefs[0] and "3 later actions were undone" in briefs[0]
+    assert f"now stale: #{delivered}" in briefs[0] and "  Oak gave me the Pokédex" in briefs[0]
+    assert "Last session's summary: left Pallet" in briefs[0] and "This is session 5" in briefs[0]
+
+
+def test_restore_refuses_a_checkpoint_of_another_core_setup(tmp_path):
+    runner, _, _ = make_runner(tmp_path, [])
+    runner.meta["core_options"] = {"sameboy_model": "Game Boy Color"}
+    runner.checkpoint("other model")
+    with pytest.raises(ValueError, match="another ROM, core or core options"):
+        restore(runner.run_dir, runner.memory, restorable(runner.run_dir, runner.memory)[-1]["data"]["file"])
+
+
+def test_one_process_per_run(tmp_path):
+    with run_lock(tmp_path), pytest.raises(ValueError, match="in use"), run_lock(tmp_path):
+        pass
+
+
+def test_the_game_restarts_at_a_saved_state(game, rom_path):
+    gen1, _, bedroom = game
+    started = []
+
+    def start():
+        started.append(Emulator(core_path(CORE), rom_path, options=CORE_OPTIONS))
+        return started[-1]
+
+    live = Game(start(), gen1, start=start)
+    live.load_state(bedroom)
+    before = live.state_text()
+    live.emu.close()  # as if the worker died
+    live.restart(bedroom)
+    assert live.state_text() == before and live.emu is started[-1]
+    live.emu.close()
