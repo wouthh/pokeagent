@@ -1,10 +1,13 @@
 """Gen 1 adapter. The first group needs no ROM; the rest boot a new game on the user's own ROM (skipped without one)."""
 
+import random
+
 import pytest
 
 from pokeagent.emulator.client import Emulator
 from pokeagent.emulator.cores import core_path
 from pokeagent.games.pokemon_gen1 import CHARMAP, CORE_OPTIONS, Gen1, Grid, bcd, decode
+from pokeagent.play import Game
 
 ENCODE = {v: k for k, v in CHARMAP.items() if len(v) == 1}
 
@@ -16,6 +19,7 @@ def text(s: str) -> bytes:
 def test_decode_and_bcd():
     assert decode(text("RED") + b"\x50" + text("X")) == "RED"
     assert bcd(b"\x01\x23\x45") == 12345
+    assert bcd(b"\x04\x48\x4a") == 0  # power-on noise is not BCD
 
 
 def test_unsupported_rom_is_refused():
@@ -129,5 +133,23 @@ def test_power_on_is_not_a_game_in_progress(rom_path):
     gen1 = Gen1(rom_path.read_bytes())
     with Emulator(core_path("sameboy"), rom_path, options=CORE_OPTIONS) as emu:
         state = gen1.state(emu)
-    assert not state["in_game"] and not gen1.observations(state)["in_game"]
-    assert gen1.state_text(state).startswith("No game is in progress yet")
+        assert not state["in_game"] and not gen1.observations(state)["in_game"]
+        assert gen1.state_text(state).startswith("No game is in progress yet")
+        with pytest.raises(ValueError, match="no game is in progress"):
+            Game(emu, gen1).act("walk", direction="up", steps=1)
+
+
+def test_state_tolerates_any_ram(rom_path):
+    """SameBoy randomises WRAM at power-on, so state() must never fail on arbitrary bytes."""
+    gen1 = Gen1(rom_path.read_bytes())
+
+    class Noise:
+        def __init__(self, seed):
+            self.rng, self.mem = random.Random(seed), {}
+
+        def read(self, addr, n):
+            return bytes(self.mem.setdefault(a, self.rng.randrange(256)) for a in range(addr, addr + n))
+
+    for seed in range(200):
+        state = gen1.state(Noise(seed))
+        gen1.state_text(state), gen1.observations(state), gen1.fingerprint(state)
