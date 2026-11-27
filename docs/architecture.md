@@ -213,7 +213,7 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
   - the next brief says when the checkpoint was saved, how many actions were undone, which entries went stale and
     which note lines were dropped.
 
-## Capabilities *(declarative implemented, phase 6a; code extensions planned)*
+## Capabilities *(declarative implemented, phase 6a; code extension runtime, phase 6b; validation and develop mode planned)*
 
 - **Builtin:** `get_state`, `press`, `walk_to(x, y)` (whole-map grid), `walk`, `advance_text` (stops at prompts).
 - **Declarative** (`capabilities.py`): plain data that trusted code validates and interprets; no agent code runs.
@@ -243,11 +243,33 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
     called them 48 times without a failure. Bulbasaur went from L7 to L13 for $1.63. Its two tool errors were its
     own: defining a macro before the one it calls, and acting after the budget ran out. It used `mem_read` but
     defined no observation.
-- **Code extensions:** written in develop mode against a small `ctx` API, executed in the sandbox, activated at
-  session boundaries.
-- Validation of code extensions is owned by the orchestrator: schemas, contracts (preconditions, postconditions,
-  invariants, declared effects), a shared execution budget across nested calls, and runs on several game states.
-  Contract violations, exceptions and timeouts count as runtime failures and roll a capability back automatically.
+- **Code extensions** (`extensions.py`, `extension_host.py`): a manifest plus `tool.py` with `run(ctx, **params)`,
+  the `tool` kind in the same registry, versions and rollback.
+  - *Manifest:* name, description, `params` and `returns` (JSON schemas), `limitations`, `compatibility` (family,
+    optional ROM sha1s), `requires`, `preconditions`, `invariants` and `postconditions` (conditions; only
+    postconditions may compare with `{"before": obs}`), `effects` (fingerprint groups: position, map, party, bag,
+    money, battle, menu), `prefer_over` (a builtin action the brief says to use it instead of; the builtin stays)
+    and `api_version` 1.
+  - *Storage:* `<data dir>/library/<sha256>/tool.py`, content-addressed, so a version's code never changes.
+  - *Host:* each call spawns `extension_host` in bubblewrap with only that folder mounted at `/ext` (read-only), no
+    ROM, no network, no home, a tmpfs `/tmp` and rlimits (1 GiB address space, 16 processes, 120 s CPU). It talks
+    JSON lines over its pipes; the orchestrator treats every line as untrusted (size cap, method and argument
+    checks) and kills the process group when the call ends.
+  - *`ctx` (API 1):* `state()`, `observe(name)`, `read(address, length)` (RAM only, at most 64 bytes),
+    `screen_text()`, `press(button, times)`, `hold(buttons, frames)`, `wait(frames)`, `call(name, **args)` (a
+    builtin action, a macro or another tool), `log(message)`, `kv` (durable per tool and scope, in the memory store)
+    and `tkv` (`tkv.json` in the run directory, saved with every checkpoint and put back by a restore). Each store
+    holds at most 64 KB of JSON.
+  - *Contract, enforced by the orchestrator:* arguments against `params` and the `preconditions` before the call
+    (a refusal does not count against the tool); during it one budget shared by every nested call (18,000 frames,
+    600 inputs, 60 s), at most 4 nested calls, and the `invariants` after every request that ran the game; after it
+    the result against `returns`, the `postconditions`, and every changed fingerprint group must be a declared
+    effect. Undeclared party, bag or money changes therefore fail the call. A refused ctx request (a bad argument, a
+    failed nested call) is an error the tool may catch; a budget, depth, invariant or protocol violation ends the
+    call. Failures count like failed macro calls and roll a version back.
+  - *Play:* `run_tool(name, args)` is one action; the result, the tool's log and the state are reported like a
+    macro's. `extensions.install` checks a manifest, stores the code and activates it; validation (several states,
+    the agent's own tests with fixtures) and develop mode, which will call it, come next.
 
 ## Verified facts
 
@@ -410,3 +432,12 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
   observation the agent wrote cannot decide that its own objective is met.
 - **2026-11-27: A refused emulator request is a `RequestRefused` (a `ValueError`),** not a dead worker, so a bad
   address from `mem_read` or an observation is a tool error and never triggers an emulator restart.
+- **2026-11-27: Code extension manifests are checked by the same plain validation as declarative capabilities,** not
+  pydantic: one style for every definition the agent writes, and jsonschema already checks the schemas inside them.
+- **2026-11-27: The extension library is content-addressed** (`library/<sha256>/`), so the registry row's hash
+  names exactly the code that runs, and identical versions share a folder.
+- **2026-11-27: Only top-level tool and macro calls count toward rollback.** A failed nested call is an error the
+  caller sees and may handle; the caller's own outcome is what is recorded.
+- **2026-11-27: No separate soft-lock invariant for tools yet.** Declared effects already fail a call that leaves a
+  menu or dialog open; a game that stops responding is left to the stuck ladder (phase 7), which sees repeated
+  fingerprints whatever caused them.

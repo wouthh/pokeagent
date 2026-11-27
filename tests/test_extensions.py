@@ -1,0 +1,208 @@
+import json
+import tempfile
+import textwrap
+from pathlib import Path
+
+import pytest
+
+from pokeagent import extensions
+from pokeagent.capabilities import CapabilityError, Registry
+from pokeagent.emulator.client import RequestRefused
+from pokeagent.extensions import Budget, Refused, Runner, install
+from pokeagent.memory import Memory
+
+
+class FakeAdapter:
+    @staticmethod
+    def state(game):
+        return {"x": game.x, "money": game.money, "screen_text": ["HELLO"]}
+
+    @staticmethod
+    def fingerprint(state):
+        return {"position": state["x"], "money": state["money"]}
+
+
+class FakeGame:
+    """A one-dimensional world: walk moves right, select spends money."""
+
+    def __init__(self, tmp_path):
+        memory = Memory(tmp_path / "memory.db", "run-1")
+        memory.open_run({"objective": "x", "rom_sha1": "red", "family": "pokemon-gen1"})
+        self.registry, self.library, self.tkv = Registry(memory), tmp_path / "library", tmp_path / "tkv.json"
+        self.adapter, self.emu, self.x, self.money, self.frames = FakeAdapter(), self, 0, 100, 0
+
+    def read(self, address, length):
+        if address < 0x8000:
+            raise RequestRefused(f"address {address:#06x} is not readable RAM")
+        return bytes(range(length))
+
+    def _observations(self):
+        return {"x": self.x, "money": self.money}
+
+    def _do(self, name, args):
+        if name == "walk":
+            self.x += args.get("steps", 1)
+            return "walked"
+        if name == "press" and args.get("button") == "select":
+            self.money -= 10
+            return "spent"
+        if name == "press" and args.get("button") in ("a", "b"):
+            return "pressed"
+        raise ValueError(f"cannot {name} {args}")
+
+    def run(self, buttons, frames):
+        self.frames += frames
+
+    def add(self, called, body, **manifest):
+        source = "def run(ctx, **params):\n" + textwrap.indent(textwrap.dedent(body), "    ")
+        manifest = {"name": called, "description": f"test tool {called}"} | manifest
+        return install(self.registry, self.library, manifest, source, "rom", 1, {"x", "money"}, {"walk", "press"})
+
+
+@pytest.fixture
+def world(tmp_path):
+    return FakeGame(tmp_path)
+
+
+def test_a_tool_uses_ctx_within_its_contract(world):
+    tool = world.add(
+        "explorer",
+        """
+        before = ctx.observe("x")
+        ctx.call("walk", steps=params["steps"])
+        ctx.wait(30)
+        ctx.log("walked")
+        ctx.kv.set("trips", (ctx.kv.get("trips") or 0) + 1)
+        ctx.tkv.set("last", ctx.state()["x"])
+        try:
+            ctx.read(0x0100)
+        except Exception as e:
+            refused = str(e)
+        return {"from": before, "ram": ctx.read(0xC000, 2).hex(), "text": ctx.screen_text(), "refused": refused}
+        """,
+        params={"type": "object", "properties": {"steps": {"type": "integer"}}, "required": ["steps"]},
+        returns={"type": "object", "required": ["from"]},
+        postconditions={"obs": "x", "op": ">", "value": {"before": "x"}},
+        effects=["position"],
+    )
+    budget = Budget.start(world)
+    result = Runner(world).call(tool, {"steps": 2}, budget)
+    assert result == {"from": 0, "ram": "0001", "text": ["HELLO"], "refused": "address 0x0100 is not readable RAM"}
+    assert world.x == 2 and world.frames == 30 and budget.logs == ["explorer: walked"]
+    Runner(world).call(tool, {"steps": 1})
+    assert world.registry.kv(tool) == {"trips": 2} and json.loads(world.tkv.read_text()) == {"explorer": {"last": 3}}
+
+
+def test_calls_are_refused_before_they_run(world):
+    tool = world.add(
+        "careful",
+        "ctx.call('walk')",
+        params={"type": "object", "properties": {"n": {"type": "integer"}}},
+        preconditions={"obs": "money", "op": ">=", "value": 50},
+        effects=["position"],
+    )
+    with pytest.raises(Refused, match="do not match"):
+        Runner(world).call(tool, {"n": "two"})
+    world.money = 10
+    with pytest.raises(Refused, match="preconditions do not hold"):
+        Runner(world).call(tool, {})
+    assert world.x == 0
+
+
+@pytest.mark.parametrize(
+    ("body", "manifest", "error"),
+    [
+        ("ctx.press('select')", {"effects": ["position"]}, "changed money, which its effects do not declare"),
+        ("ctx.press('a')", {"postconditions": {"obs": "x", "op": ">", "value": {"before": "x"}}}, "postcondition"),
+        ("return 'yes'", {"returns": {"type": "integer"}}, "does not match returns"),
+        ("return 1 / 0", {}, "failed: ZeroDivisionError"),
+        (
+            "for _ in range(5): ctx.call('walk')",
+            {"invariants": {"obs": "x", "op": "<=", "value": 3}, "effects": ["position"]},
+            "invariant failed",
+        ),
+        ("for _ in range(700): ctx.press('a')", {}, "inputs is used up"),
+        ("while True: pass", {}, "ran out of time"),
+        ("x = bytearray(2 << 30)", {}, "failed: MemoryError"),
+    ],
+)
+def test_contract_violations_and_budgets_fail_the_call(world, body, manifest, error):
+    tool = world.add("broken", body, **manifest)
+    budget = Budget.start(world)
+    budget.deadline -= budget.seconds - 3  # three seconds are plenty for every case
+    with pytest.raises(CapabilityError, match=error):
+        Runner(world).call(tool, {}, budget)
+
+
+def test_tools_call_each_other_within_one_budget(world):
+    world.add("step", "ctx.call('walk')\nreturn ctx.observe('x')", effects=["position"])
+    outer = world.add("twice", "return [ctx.call('step'), ctx.call('step')]", effects=["position"])
+    assert Runner(world).call(outer, {}) == [1, 2]
+    deep = world.add("deep", "return ctx.call('deep')")
+    with pytest.raises(CapabilityError, match="at most 4 deep"):
+        Runner(world).call(deep, {})
+    catches = world.add("catches", "try:\n    ctx.call('nothing')\nexcept Exception as e:\n    return str(e)")
+    assert Runner(world).call(catches, {}) == "no builtin action or active capability named 'nothing'"
+
+
+@pytest.fixture
+def home_secret():
+    """A file in the real home cache (the sandbox's own /tmp hides pytest's tmp_path anyway)."""
+    cache = Path.home() / ".cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="pokeagent-test-", dir=cache) as folder:
+        secret = Path(folder) / "secret.txt"
+        secret.write_text("secret")
+        yield secret
+
+
+def test_a_tool_cannot_reach_the_host(world, tmp_path, home_secret):
+    (tmp_path / "secret.txt").write_text("secret")
+    tool = world.add(
+        "escape",
+        f"""
+        import os, socket, subprocess
+        tried = {{}}
+        for name, attempt in [
+            ("home", lambda: open({str(home_secret)!r}).read()),
+            ("tmp", lambda: open({str(tmp_path / "secret.txt")!r}).read()),
+            ("database", lambda: open({str(tmp_path / "memory.db")!r}, 'rb').read(1)),
+            ("network", lambda: socket.create_connection(("1.1.1.1", 443), timeout=2)),
+            ("library", lambda: open("/ext/tool.py", "a").write("x")),
+            ("spawn", lambda: [subprocess.Popen(["sleep", "5"]) for _ in range(40)]),
+        ]:
+            try:
+                attempt()
+                tried[name] = "worked"
+            except Exception as e:
+                tried[name] = type(e).__name__
+        open("/tmp/scratch", "w").write("fine")
+        tried["own_tmp"] = open("/tmp/scratch").read()
+        return tried
+        """,
+    )
+    tried = Runner(world).call(tool, {})
+    assert tried.pop("own_tmp") == "fine" and all(outcome != "worked" for outcome in tried.values()), tried
+    assert extensions.LIMITS["RLIMIT_NPROC"] < 40
+
+
+def test_manifests_are_checked(world):
+    bad = [
+        ({"effects": ["teleport"]}, "effects must be"),
+        ({"params": {"type": "array"}}, "object schema"),
+        ({"returns": {"type": 3}}, "not a valid JSON schema"),
+        ({"requires": ["ghost"]}, "do not exist"),
+        ({"prefer_over": "fly"}, "prefer_over names a builtin"),
+        ({"preconditions": {"obs": "x", "op": ">", "value": {"before": "x"}}}, "a value is a number"),
+        ({"postconditions": {"obs": "x", "op": ">", "value": {"before": "hp"}}}, "unknown observations"),
+        ({"compatibility": {"family": "zelda"}}, "family is pokemon-gen1"),
+        ({"compatibility": {"roms": ["blue"]}}, "not in the tool's compatibility"),
+        ({"api_version": 2}, "api_version must be 1"),
+        ({"name": "walk"}, "builtin name"),
+    ]
+    for manifest, error in bad:
+        with pytest.raises(CapabilityError, match=error):
+            world.add("tool_x", "return 1", **manifest)
+    tool = world.add("walker", "return 1", prefer_over="walk_to")
+    assert world.registry.get("walker", "tool")["spec"]["prefer_over"] == "walk_to"
+    assert (world.library / tool["spec"]["sha256"] / "tool.py").exists()

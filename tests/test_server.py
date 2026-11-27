@@ -41,6 +41,10 @@ class FakeGame:
             raise RequestRefused(f"address {address:#06x} is not readable RAM")
         return bytes(range(length))
 
+    def run_tool(self, name, args):
+        tool = self.registry.get(name, "tool")
+        return f"run_tool {name}: returned 1", None, tool, None
+
     def run_macro(self, name, args):
         macro = self.registry.get(name, "macro")
         check_args(macro["spec"], args)
@@ -198,3 +202,5 @@ def test_capability_tools(server):
     assert "no active macro" in text(use("run_macro", name="climb"))
     assert text(use("list_capabilities")).startswith("hp (observation v1, rom; 1 byte(s) at 0xd16c as u8)")
     assert session.actions == 6  # every run_macro call is one action
+    assert "no active tool" in text(use("run_tool", name="climb"))  # a macro is not a tool
+    assert session.actions == 7

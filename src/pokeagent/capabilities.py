@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS capabilities (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
     version INTEGER NOT NULL,
-    kind TEXT NOT NULL CHECK (kind IN ('observation', 'macro')),
+    kind TEXT NOT NULL CHECK (kind IN ('observation', 'macro', 'tool')),
     scope TEXT NOT NULL,
     spec TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('active', 'previous', 'retired')),
@@ -46,6 +46,12 @@ BEFORE UPDATE OF id, name, version, kind, scope, spec, run, session, created ON 
 BEGIN SELECT RAISE(ABORT, 'a capability version never changes; define a new version'); END;
 CREATE TRIGGER IF NOT EXISTS capabilities_kept BEFORE DELETE ON capabilities
 BEGIN SELECT RAISE(ABORT, 'capability versions are never deleted'); END;
+CREATE TABLE IF NOT EXISTS capability_kv (
+    scope TEXT NOT NULL,
+    name TEXT NOT NULL,
+    data TEXT NOT NULL,
+    PRIMARY KEY (scope, name)
+);
 """
 
 
@@ -319,6 +325,22 @@ class Registry:
         self.memory.event("capability_rollback", {"name": capability["name"], "note": note}, session)
         return note
 
+    def kv(self, capability: dict) -> dict:
+        """A tool's durable store (ctx.kv), shared by its versions in its scope."""
+        rows = self.memory.rows(
+            "SELECT data FROM capability_kv WHERE scope = ? AND name = ?", capability["scope"], capability["name"]
+        )
+        return json.loads(rows[0]["data"]) if rows else {}
+
+    def set_kv(self, capability: dict, data: dict) -> None:
+        self.memory.write(
+            "INSERT INTO capability_kv (scope, name, data) VALUES (?, ?, ?)"
+            " ON CONFLICT (scope, name) DO UPDATE SET data = excluded.data",
+            capability["scope"],
+            capability["name"],
+            json.dumps(data),
+        )
+
     def usage(self, capability: dict) -> tuple[int, int]:
         """(calls, failures) of this version."""
         calls = self.memory.capability_calls(capability["id"])
@@ -334,7 +356,9 @@ def summary(registry: Registry, capability: dict) -> str:
         where = f"{spec['length']} byte(s) at {spec['address']:#06x} as {spec['decode']}"
         return f"{spec['name']} (observation v{capability['version']}, {scope}; {where}): {spec['description']}"
     params = ", ".join(spec["params"].get("properties", {})) or "no params"
-    return f"{spec['name']} (macro v{capability['version']}, {scope}; {params}; {used}): {spec['description']}"
+    prefer = f"use instead of {spec['prefer_over']}; " if spec.get("prefer_over") else ""
+    kind = capability["kind"]
+    return f"{spec['name']} ({kind} v{capability['version']}, {scope}; {prefer}{params}; {used}): {spec['description']}"
 
 
 # ---- shared checks ----

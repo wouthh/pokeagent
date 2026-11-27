@@ -45,7 +45,7 @@ class Session:
 class GameServer:
     """Owns the sessions and the tools. `game` provides `full_state()` and `act(name, **args)`, both returning
     (text, png bytes or None), `observations()` (the builtin ones), `registry` (the agent's capabilities),
-    `run_macro(name, args)`, `try_observation(spec)` and `peek(address, length)`."""
+    `run_macro(name, args)`, `run_tool(name, args)`, `try_observation(spec)` and `peek(address, length)`."""
 
     def __init__(self, game, memory: Memory, notes: Path, harness_issues: Path):
         self.game, self.memory, self.notes, self.harness_issues = game, memory, notes, harness_issues
@@ -310,24 +310,34 @@ class GameServer:
             found = remember(self.game.registry.define, "macro", spec, scope, session.number)
             return f"defined {name} version {found['version']}; run it with run_macro"
 
-        @tool
-        async def run_macro(name: str, ctx: Context, args: dict | None = None) -> list | str:
-            """Run one of your macros with `args`. One action, however many actions the macro takes. A macro that
-            fails part way stops there and reports why; a version that keeps failing is rolled back."""
+        async def run_capability(ctx: Context, run, name: str, args: dict | None):
             ran = {}
 
             def call():
-                text, png, ran["macro"], ran["error"] = self.game.run_macro(name, args or {})
+                text, png, ran["capability"], ran["error"] = run(name, args or {})
                 return text, png
 
-            reply = await act(ctx, "run_macro", call, macro=name, args=args or {})
-            if ran and (note := self.game.registry.record(ran["macro"], ran["error"], self._session(ctx).number)):
+            reply = await act(ctx, run.__name__, call, capability=name, args=args or {})
+            if ran and (note := self.game.registry.record(ran["capability"], ran["error"], self._session(ctx).number)):
                 return [*reply, note] if isinstance(reply, list) else f"{reply}\n{note}"
             return reply
 
         @tool
+        async def run_macro(name: str, ctx: Context, args: dict | None = None) -> list | str:
+            """Run one of your macros with `args`. One action, however many actions the macro takes. A macro that
+            fails part way stops there and reports why; a version that keeps failing is rolled back."""
+            return await run_capability(ctx, self.game.run_macro, name, args)
+
+        @tool
+        async def run_tool(name: str, ctx: Context, args: dict | None = None) -> list | str:
+            """Run one of your code tools (listed in your brief and by list_capabilities) with `args`. One action. A
+            tool runs sandboxed with a budget and is held to its declared contract; a call it breaks counts as a
+            failure, and a version that keeps failing is rolled back."""
+            return await run_capability(ctx, self.game.run_tool, name, args)
+
+        @tool
         def list_capabilities(ctx: Context) -> str:
-            """Your observations and macros (this ROM's and this game family's), with their use so far."""
+            """Your observations, macros and tools (this ROM's and this game family's), with their use so far."""
             self._session(ctx)
             found = self.game.registry.active()
             return "\n".join(capabilities.summary(self.game.registry, c) for c in found) or "none defined yet"

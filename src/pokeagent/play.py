@@ -21,7 +21,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from pokeagent import capabilities, objectives
+from pokeagent import capabilities, extensions, objectives
 from pokeagent.agents.claude_cli import ProviderError, SessionResult, SessionSpec, preflight, run_session
 from pokeagent.capabilities import Registry
 from pokeagent.emulator.client import Emulator, EmulatorError
@@ -44,7 +44,7 @@ BUTTONS = ("a", "b", "start", "select", "up", "down", "left", "right")
 DIRECTIONS = ("up", "down", "left", "right")
 SETTLE_FRAMES = 20  # map events (Oak in Pallet Town) start a few frames after a walk ends
 KEEP_CHECKPOINTS = 10
-CONTEXT_FILES = ("notes.md", "state.json")
+CONTEXT_FILES = ("notes.md", "state.json", "tkv.json")
 CHECKPOINT_EVERY = 25  # actions
 MAX_FAILURES = 5
 MAX_RESTARTS = 3  # emulator restarts per play
@@ -84,13 +84,24 @@ def write_atomic(path: Path, data: bytes) -> None:
 class Game:
     """The live emulator and adapter. One lock serialises every call. The adapter drives this object as its
     emulator, so `run` can pace emulation (`speed` x real time) and feed the viewer. `start` makes a new emulator
-    for `restart`; `registry` holds the observations and macros the agent defined."""
+    for `restart`; `registry` holds the capabilities the agent defined, `library` their code and `tkv` the path of
+    the tools' timeline-bound store."""
 
     def __init__(
-        self, emu: Emulator, adapter: Gen1, speed: float | None = None, viewer=None, start=None, registry=None
+        self,
+        emu: Emulator,
+        adapter: Gen1,
+        speed: float | None = None,
+        viewer=None,
+        start=None,
+        registry=None,
+        library: Path | None = None,
+        tkv: Path | None = None,
     ):
         self.emu, self.adapter, self.speed, self.viewer, self.start = emu, adapter, speed, viewer, start
-        self.registry: Registry | None = registry  # the run's declarative capabilities
+        self.registry: Registry | None = registry
+        self.library, self.tkv = library, tkv
+        self.frames = 0  # emulated frames since start, for tool budgets
         self.lock = threading.Lock()
         self.fps = emu.info["fps"]
         self._shown = 0.0
@@ -100,6 +111,7 @@ class Game:
 
     def run(self, buttons=(), frames: int = 1) -> None:
         self.emu.run(buttons, frames)
+        self.frames += frames
         if self.speed:
             time.sleep(frames / (self.fps * self.speed))  # ponytail: ignores emulation time; fine at watch speeds
         if self.viewer and time.monotonic() - self._shown > 1 / 30:
@@ -210,6 +222,24 @@ class Game:
                 error, outcome = str(e), f"failed: {e}"
             text, png = self._report(f"run_macro {name}", outcome, before)
             return text, png, macro, error
+
+    def run_tool(self, name: str, args: dict) -> tuple[str, bytes | None, dict, str | None]:
+        """Run a code extension as one action, like `run_macro`. A refused call (arguments, preconditions) raises."""
+        with self.lock:
+            tool = self.registry.get(name, "tool")
+            before = self.adapter.state(self)
+            budget = extensions.Budget.start(self)
+            try:
+                result = extensions.Runner(self).call(tool, args, budget)
+                error, outcome = None, f"returned {json.dumps(result, default=str)[:1000]}"
+            except extensions.Refused:
+                raise
+            except ValueError as e:  # a failure or contract violation
+                error, outcome = str(e), f"failed: {e}"
+            if budget.logs:
+                outcome += "\nIts log:\n" + "\n".join("  " + line for line in budget.logs)
+            text, png = self._report(f"run_tool {name}", outcome, before)
+            return text, png, tool, error
 
     def _report(self, name: str, outcome: str, before: dict) -> tuple[str, bytes | None]:
         after = self.adapter.state(self)
@@ -393,7 +423,7 @@ class Runner:
             lines += [rolled_back["data"]["note"], ""]
         lines += [
             f"This is session {number}. You have {self.budget} game actions (press, walk, walk_to, advance_text,"
-            " run_macro); every other tool is free.",
+            " run_macro, run_tool); every other tool is free.",
             f"Last session's summary: {progress.get('summary') or 'none, this is the first session.'}",
             f"Planned focus: {progress.get('next_focus') or 'none'}",
             "",
@@ -404,7 +434,7 @@ class Runner:
             lines += ["", "Knowledge that may bear on this (knowledge_search finds more):"]
             lines += [describe_knowledge(entry) for entry in hits]
         if found := self.game.registry.active():
-            lines += ["", "Your observations and macros:"]
+            lines += ["", "Your observations, macros and tools:"]
             lines += [capabilities.summary(self.game.registry, c) for c in found]
         return "\n".join([*lines, "", "Current game state:", self.game.state_text()])
 
@@ -553,6 +583,9 @@ def restore(run_dir: Path, memory: Memory, name: str) -> dict:
     # Read and write every file before the timeline changes, so a failure (disk full) leaves the run as it was.
     saved_notes = path.with_suffix(".notes.md")
     new_notes = saved_notes.read_text() if saved_notes.exists() else ""
+    tkv = run_dir / "tkv.json"  # the tools' timeline store goes back with the game
+    saved_tkv = path.with_suffix(".tkv.json")
+    old_tkv, new_tkv = (f.read_bytes() if f.exists() else None for f in (tkv, saved_tkv))
     saved_progress = path.with_suffix(".state.json")
     restored = json.loads(saved_progress.read_text()) if saved_progress.exists() else {}
     restored["sessions"] = progress["sessions"]
@@ -561,12 +594,14 @@ def restore(run_dir: Path, memory: Memory, name: str) -> dict:
         write_atomic(run_dir / "recovery.state", path.read_bytes())
         write_atomic(notes, new_notes.encode())
         write_atomic(progress_file, (json.dumps(restored, indent=1) + "\n").encode())
+        _put(tkv, new_tkv)
         stale = memory.branch(target)
     except BaseException:
         if old_state is not None:
             write_atomic(run_dir / "recovery.state", old_state)
         write_atomic(notes, old_notes.encode())
         write_atomic(progress_file, (json.dumps(progress, indent=1) + "\n").encode())
+        _put(tkv, old_tkv)
         raise
     kept = set(new_notes.splitlines())
     data = {
@@ -581,6 +616,14 @@ def restore(run_dir: Path, memory: Memory, name: str) -> dict:
         memory.set_status("running")
     memory.event("restore", data)
     return data
+
+
+def _put(path: Path, data: bytes | None) -> None:
+    """Write `data` atomically, or remove the file when there is none."""
+    if data is None:
+        path.unlink(missing_ok=True)
+    else:
+        write_atomic(path, data)
 
 
 def restore_notice(data: dict) -> str:
@@ -627,7 +670,9 @@ def play(
 
             viewer = Viewer()
         start = partial(Emulator, core_path(meta["core"]), rom, options=meta["core_options"])
-        game = Game(start(), adapter, speed, viewer, start, Registry(memory))
+        game = Game(
+            start(), adapter, speed, viewer, start, Registry(memory), data_dir / "library", run_dir / "tkv.json"
+        )
         try:
             if state := latest_state(run_dir):
                 game.load_state(state)
