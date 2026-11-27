@@ -22,10 +22,19 @@ def serve(core: str, rom: str, options: dict[str, str]) -> None:
     os.dup2(2, 1)
     rpc_in = sys.stdin.buffer
 
-    from libretro import ArrayVideoDriver, DictOptionDriver, IterableInputDriver, Session
+    from libretro import ArrayAudioDriver, ArrayVideoDriver, DictOptionDriver, IterableInputDriver, Session
     from libretro.api import MemoryDescriptorFlag
     from libretro.api.input import JoypadState
     from PIL import Image
+
+    class SilentAudio(ArrayAudioDriver):
+        # The default driver keeps every sample. SameBoy emits about 2.1 M samples per second, so a worker would hit
+        # its address-space limit after a few emulated minutes.
+        def sample(self, left: int, right: int) -> None:
+            pass
+
+        def sample_batch(self, frames: memoryview) -> int:
+            return frames.nbytes // 4  # stereo 16-bit frames consumed
 
     held = [JoypadState()]
 
@@ -44,6 +53,7 @@ def serve(core: str, rom: str, options: dict[str, str]) -> None:
         rom,
         input=IterableInputDriver(inputs),
         video=ArrayVideoDriver,
+        audio=SilentAudio,
         options=DictOptionDriver(variables=options),
         log=None,
     ) as session:
