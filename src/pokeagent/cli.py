@@ -45,11 +45,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def find_run(run: str, data_dir: Path) -> Path:
-    run_dir = Path(run) if "/" in run else data_dir / "runs" / run
+def find_run(run: str, data_dir: Path | None) -> tuple[Path, Path]:
+    """The run folder and its owning data dir: a run folder path names its own `<data dir>/runs/<id>` owner
+    unless `--data-dir` says otherwise."""
+    if "/" in run:
+        run_dir = Path(run).resolve()
+        data_dir = data_dir or run_dir.parent.parent
+    else:
+        from pokeagent import play
+
+        data_dir = data_dir or play.default_data_dir()
+        run_dir = data_dir / "runs" / run
     if not (run_dir / "run.json").exists():
         raise ValueError(f"no run at {run_dir}")
-    return run_dir
+    return run_dir, data_dir
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -62,9 +71,8 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "objective":
         from pokeagent import objectives, play
 
-        data_dir = args.data_dir or play.default_data_dir()
         try:
-            run_dir = find_run(args.run, data_dir)
+            run_dir, data_dir = find_run(args.run, args.data_dir)
             with contextlib.closing(play.open_memory(run_dir, data_dir)) as memory:
                 if args.action == "confirm":
                     print(f"run {run_dir.name} complete: {objectives.confirm(memory)}")
@@ -79,12 +87,12 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command in ("play", "resume"):
         from pokeagent import play
 
-        data_dir = args.data_dir or play.default_data_dir()
         try:
             if args.command == "play":
+                data_dir = args.data_dir or play.default_data_dir()
                 run_dir = play.new_run(args.rom, args.objective, data_dir, args.success)
             else:
-                run_dir = find_run(args.run, data_dir)
+                run_dir, data_dir = find_run(args.run, args.data_dir)
             print(f"run {run_dir.name}: log at {run_dir / 'play.log'}")
             reason = play.play(
                 run_dir,
