@@ -254,6 +254,7 @@ class Runner:
         self.meta = json.loads((run_dir / "run.json").read_text())
         self.memory: Memory = server.memory
         self._actions = self.restarts = 0
+        self._after_lock = threading.Lock()  # a save and its write stay together, so recovery never regresses
         server.after_action, server.recover = self._after_action, self.recover
         (run_dir / "sessions").mkdir(exist_ok=True)
         (run_dir / "checkpoints").mkdir(exist_ok=True)
@@ -290,11 +291,12 @@ class Runner:
         self.log("checkpoint", f"{path.name} ({reason})")
 
     def _after_action(self) -> None:
-        state = self.game.save_state()  # one emulator save: a second one could fail after the action is committed
-        write_atomic(self.run_dir / "recovery.state", state)
-        self._actions += 1
-        if self._actions % CHECKPOINT_EVERY == 0:
-            self.checkpoint(f"{self._actions} actions", state)
+        with self._after_lock:
+            state = self.game.save_state()  # one emulator save: a second one could fail after the action is committed
+            write_atomic(self.run_dir / "recovery.state", state)
+            self._actions += 1
+            if self._actions % CHECKPOINT_EVERY == 0:
+                self.checkpoint(f"{self._actions} actions", state)
 
     def recover(self, error: str) -> bool:
         """Restart a failed emulator at the state after the last completed action; False once restarts run out."""
