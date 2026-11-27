@@ -84,3 +84,14 @@ def test_elapsed_time_leaves_out_limit_waits(tmp_path, monkeypatch):
     start = memory.events("session_start", limit=-1)[0]["created"]
     badge = memory.events("milestone", limit=-1)[1]["created"]
     assert stats._reached(memory)["badge 1"]["minutes"] == (badge - start - 1200) / 60 > 0
+
+
+def test_an_interrupted_session_is_reported(tmp_path):
+    memory = Memory(tmp_path / "memory.db", "r")
+    memory.open_run(META)
+    memory.event("session_start", {}, 1)
+    memory.event("action", {"outcome": "walk"}, 1)
+    memory.event("milestone", {"kind": "map", "map_id": 1, "text": "first visit to Pallet Town"}, 1)
+    (row,) = stats.sessions(memory)
+    assert (row["end"], row["actions"], row["milestones"], row["mode"]) == ("interrupted", 1, 1, "play")
+    assert "interrupted" in stats.report(memory)

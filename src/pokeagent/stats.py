@@ -14,14 +14,21 @@ from pokeagent.memory import Memory
 
 
 def sessions(memory: Memory) -> list[dict]:
-    """One row per ended session, oldest first."""
-    starts = {e["session"]: e["created"] for e in memory.events("session_start", limit=-1)}
+    """One row per session, oldest first. A session stopped by Ctrl-C has no `session_end`: it shows as
+    "interrupted", with its actions counted from events and no turns, usage or cost (reported at the end)."""
+    ends = {e["session"]: e for e in memory.events("session_end", limit=-1)}
     calls = memory.events("capability_call", limit=-1)
     milestones = memory.events("milestone", limit=-1)
     rows = []
-    for end in memory.events("session_end", limit=-1):
-        n, data, usage = end["session"], end["data"], end["data"].get("usage") or {}
+    for start in memory.events("session_start", limit=-1):
+        n = start["session"]
         mine = [c for c in calls if c["session"] == n]
+        acted = memory.events("action", session=n, limit=-1)
+        end = ends.get(n)
+        data = end["data"] if end else {"end": "interrupted", "turns": 0, "actions": len(acted), "cost_usd": 0.0}
+        data = {"mode": start["data"].get("mode", "play")} | data
+        usage = data.get("usage") or {}
+        stopped = end["created"] if end else max([start["created"]] + [e["created"] for e in acted + mine])
         rows.append(
             {
                 "session": n,
@@ -35,7 +42,7 @@ def sessions(memory: Memory) -> list[dict]:
                 "tokens": develop.tokens(usage),
                 "cache_read": usage.get("cache_read_input_tokens") or 0,
                 "cost": data["cost_usd"],
-                "minutes": (end["created"] - starts.get(n, end["created"])) / 60,
+                "minutes": (stopped - start["created"]) / 60,
             }
         )
     return rows
