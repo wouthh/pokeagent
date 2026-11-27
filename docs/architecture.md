@@ -237,6 +237,12 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
     next brief says what was rolled back and lists the active capabilities with their calls and failures.
   - *Free tools:* `mem_read(address, length)` (hex, RAM only), `define_observation`, `define_macro` and
     `list_capabilities`.
+  - *Live check (2026-11-27, one 100-action session continuing run 1a on Route 2):* unprompted by name, the agent
+    defined 7 macros (two redefined as version 2) that nest up to three deep, among them `grind_one` (pace in the
+    grass until a battle, then fight until it ends: one action per wild battle) and a Pokémon Center round trip, and
+    called them 48 times without a failure. Bulbasaur went from L7 to L13 for $1.63. Its two tool errors were its
+    own: defining a macro before the one it calls, and acting after the budget ran out. It used `mem_read` but
+    defined no observation.
 - **Code extensions:** written in develop mode against a small `ctx` API, executed in the sandbox, activated at
   session boundaries.
 - Validation of code extensions is owned by the orchestrator: schemas, contracts (preconditions, postconditions,
