@@ -149,7 +149,8 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
   first), recent knowledge and the last development cycle. The `--watch` window shows the same text in a panel
   under the frame, refreshed at session starts and ends, milestones and stuck notices.
 - `pokeagent stats RUN`: one row per session (mode, end, turns, actions, capability calls and failures, milestones,
-  tokens, cache reads, cost, minutes), totals per mode and the development share of tokens.
+  tokens, cache reads, cost, minutes), totals per mode and the development share of tokens. A session without its end event shows as
+  `running` while a pokeagent process holds the run's lock, else as `interrupted`.
 - `pokeagent stats RUN --compare RUN2`: for every milestone both runs reached (by its text, such as `badge 1` or
   `first visit to Pewter City`), the session, actions, tokens, cost and minutes each run needed to first reach it.
   Minutes leave out usage limit waits (`limit_wait` events). The CLI reports usage only at a session's end, so a

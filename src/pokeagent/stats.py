@@ -6,6 +6,7 @@ at a session's end, so a milestone is charged its whole session's tokens and cos
 limit waits. The numbers are reported as measured.
 """
 
+import fcntl
 import json
 from pathlib import Path
 
@@ -13,19 +14,34 @@ from pokeagent import capabilities, develop, objectives
 from pokeagent.memory import Memory
 
 
-def sessions(memory: Memory) -> list[dict]:
-    """One row per session, oldest first. A session stopped by Ctrl-C has no `session_end`: it shows as
-    "interrupted", with its actions counted from events and no turns, usage or cost (reported at the end)."""
+def live(run_dir: Path) -> bool:
+    """Whether a pokeagent process plays or restores the run now (it holds the run's lock)."""
+    try:
+        with (run_dir / ".lock").open("rb") as f:
+            fcntl.flock(f, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except FileNotFoundError:
+        return False
+    except BlockingIOError:
+        return True
+    return False
+
+
+def sessions(memory: Memory, live: bool = False) -> list[dict]:
+    """One row per session, oldest first. A session without `session_end` is "running" if it is the last one of a
+    live run, else "interrupted" (stopped by Ctrl-C), with its actions counted from events and no turns, usage or
+    cost (reported at the end)."""
     ends = {e["session"]: e for e in memory.events("session_end", limit=-1)}
     calls = memory.events("capability_call", limit=-1)
     milestones = memory.events("milestone", limit=-1)
+    starts = memory.events("session_start", limit=-1)
     rows = []
-    for start in memory.events("session_start", limit=-1):
+    for start in starts:
         n = start["session"]
         mine = [c for c in calls if c["session"] == n]
         acted = memory.events("action", session=n, limit=-1)
         end = ends.get(n)
-        data = end["data"] if end else {"end": "interrupted", "turns": 0, "actions": len(acted), "cost_usd": 0.0}
+        open_end = "running" if live and start is starts[-1] else "interrupted"
+        data = end["data"] if end else {"end": open_end, "turns": 0, "actions": len(acted), "cost_usd": 0.0}
         data = {"mode": start["data"].get("mode", "play")} | data
         usage = data.get("usage") or {}
         stopped = end["created"] if end else max([start["created"]] + [e["created"] for e in acted + mine])
@@ -48,8 +64,8 @@ def sessions(memory: Memory) -> list[dict]:
     return rows
 
 
-def report(memory: Memory) -> str:
-    rows = sessions(memory)
+def report(memory: Memory, live: bool = False) -> str:
+    rows = sessions(memory, live)
     head = f"{'session':>7} {'mode':7} {'end':10} {'turns':>5} {'actions':>7} {'calls':>5} {'failed':>6}"
     head += f" {'milestones':>10} {'tokens':>10} {'cache read':>11} {'cost':>7} {'minutes':>7}"
     lines = [head]

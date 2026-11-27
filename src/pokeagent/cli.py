@@ -178,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
                 if args.command == "status":
                     print(stats.status(memory, run_dir))
                 else:
-                    print(stats.report(memory))
+                    print(stats.report(memory, stats.live(run_dir)))
                     if args.compare:
                         other_dir, _ = find_run(args.compare, data_dir)
                         with contextlib.closing(play.open_memory(other_dir, data_dir)) as other:
