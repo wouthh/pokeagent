@@ -166,6 +166,14 @@ def test_checkpoints_every_25_actions_and_keeps_the_last_ten(tmp_path):
     assert len(list((runner.run_dir / "checkpoints").glob("*.state"))) == 10
 
 
+def test_a_checkpoint_action_saves_the_emulator_once(tmp_path):
+    runner, _, _ = make_runner(tmp_path, [])
+    for _ in range(25):
+        runner.server.after_action()
+    assert runner.game.saves == 25  # the 25th action's checkpoint reuses its recovery state
+    assert sorted((runner.run_dir / "checkpoints").glob("*.state"))[-1].read_bytes() == latest_state(runner.run_dir)
+
+
 def test_game_actions_on_the_rom(game):
     gen1, emu, bedroom = game
     emu.load_state(bedroom)
@@ -231,7 +239,9 @@ def test_restore_branches_a_timeline_and_the_brief_says_what_changed(tmp_path):
     progress.write_text(json.dumps({"sessions": 4, "summary": "delivered the parcel", "next_focus": "Route 2"}))
     runner.checkpoint("session 4")
 
+    memory.set_status("complete", "done")
     done = restore(run_dir, memory, checkpoint)
+    assert memory.status()[0] == "running"
     assert done["undone_actions"] == 3 and done["stale"] == [delivered]
     assert latest_state(run_dir) == b"state 1" and notes.read_text() == "go to Viridian\nthe Mart has the parcel\n"
     assert json.loads(progress.read_text()) == {"sessions": 4, "summary": "left Pallet", "next_focus": "the Mart"}
