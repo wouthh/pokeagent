@@ -282,6 +282,30 @@ def test_milestones_and_a_stuck_run_that_restores_then_pauses(tmp_path):
     assert len(briefs) == 3
 
 
+def test_a_badge_on_the_first_action_is_a_milestone_and_its_checkpoint_carries_the_badge_score(tmp_path):
+    runner, _, _ = make_runner(tmp_path, [(SessionResult("completed"), None)])
+    runner.game.badges = 1  # earned by the very first action after the start
+    runner._after_action()
+    assert [e["data"]["text"] for e in runner.memory.events("milestone", limit=-1)][-1] == "badge 1"
+    checkpoint = next(e for e in runner.memory.events("checkpoint", limit=-1) if e["data"]["reason"] == "badge 1")
+    assert checkpoint["data"]["best"] == runner.ladder.best
+
+
+def test_success_is_judged_before_a_stuck_restore(tmp_path):
+    runner, _, _ = make_runner(tmp_path, [(SessionResult("completed"), None)])
+    game, replay = runner.game, runner.provider
+
+    def acting(spec, on_event):
+        for _ in range(4 * stuck.STEP):
+            game.x = 1 - game.x
+            runner._after_action()
+        game.map_id = HALL_OF_FAME  # the check holds, but the ladder never saw progress
+        return replay(spec, on_event)
+
+    runner.provider = acting
+    assert runner.loop("url") == "complete" and not runner.memory.events("restore")
+
+
 def test_the_check_waits_for_a_game_in_progress(tmp_path):
     # Power-on RAM is noise: a map id that happens to equal the Hall of Fame must not complete the run.
     runner, briefs, _ = make_runner(tmp_path, [(SessionResult("completed"), None)], map_id=HALL_OF_FAME, in_game=False)
