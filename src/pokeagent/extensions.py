@@ -83,6 +83,8 @@ def check_manifest(manifest: dict, observations: set[str], tools: set[str], take
             jsonschema.Draft202012Validator.check_schema(schema)
         except jsonschema.SchemaError as e:
             raise CapabilityError(f"{key} is not a valid JSON schema: {e.message}") from None
+        if capabilities._has_ref(schema):
+            raise CapabilityError(f"{key} may not use $ref or $dynamicRef: the orchestrator never fetches schemas")
         if key == "params" and schema.get("type") != "object":
             raise CapabilityError('params must be an object schema ({"type": "object", ...})')
         out[key] = schema

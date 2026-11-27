@@ -196,6 +196,7 @@ def test_manifests_are_checked(world):
         ({"effects": ["teleport"]}, "effects must be"),
         ({"params": {"type": "array"}}, "object schema"),
         ({"returns": {"type": 3}}, "not a valid JSON schema"),
+        ({"returns": {"$ref": "https://example.com/schema.json"}}, "may not use \\$ref"),
         ({"requires": ["ghost"]}, "do not exist"),
         ({"prefer_over": "fly"}, "prefer_over names a builtin"),
         ({"preconditions": {"obs": "x", "op": ">", "value": {"before": "x"}}}, "a value is a number"),
