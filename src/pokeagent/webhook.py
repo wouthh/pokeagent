@@ -57,9 +57,13 @@ def decide(tool: str, tool_input: dict) -> str | None:
             return f"scheme {parts.scheme!r} is not allowed"
         if parts.username or parts.password:
             return "credentials in the URL"
-        if problem := _host_problem(parts.hostname or ""):
+        host = parts.hostname or ""
+        if "%" in host:
+            # The fetcher percent-decodes hostnames (127%2e0.0%2e1 is 127.0.0.1); only a plain host is allowed.
+            return "percent-encoded host"
+        if problem := _host_problem(host):
             return problem
-        if _token_like(parts.hostname or ""):
+        if _token_like(host):
             return "host contains a long token-like string"
         payload = parts.path + ("?" + parts.query if parts.query else "")
     elif tool == "WebSearch":

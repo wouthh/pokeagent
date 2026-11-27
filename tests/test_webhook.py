@@ -34,6 +34,8 @@ def test_allows_ordinary_pages(url):
         "http://169.254.169.254/latest/meta-data/",
         "http://router.lan/",
         "http://localhost./",
+        "http://127%2e0.0%2e1/",
+        "http://local%68ost/",
         "http://router.lan./",
         "https://3f9a2b7c4d5e6f708192a3b4c5d6e7f8.example.com/",
         "https://example.com/?q=" + "".join(f"%{ord(c):02x}" for c in "3f9a2b7c4d5e6f708192a3b4c5d6e7f8"),
