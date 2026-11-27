@@ -97,6 +97,7 @@ def test_fixtures_and_memory_tools_use_the_development_game(bench, monkeypatch):
     assert bench.diff("before") == "1 byte(s) differ\n0xc010: 0x00 -> 0x42"
     assert bench.search(0x4200, width=2) == "2 address(es): 0xc00f, 0xc010"  # either byte order
     assert bench.search(0x42, among=[0xC011]) == "0 address(es)"
+    assert bench.search(0x42, among=[]) == "0 address(es)"  # an exhausted candidate set stays empty
     with pytest.raises(ValueError, match="no snapshot gone"):
         bench.diff("gone")
     with pytest.raises(ValueError, match="fit"):

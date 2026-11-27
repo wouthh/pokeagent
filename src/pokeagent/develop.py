@@ -108,7 +108,7 @@ class Bench:
             raw = data[i : i + width]
             if value in (int.from_bytes(raw, "little"), int.from_bytes(raw, "big")):
                 hits.append(WRAM[0] + i)
-        if among:
+        if among is not None:
             hits = [a for a in hits if a in set(among)]
         shown = ", ".join(f"{a:#06x}" for a in hits[:100])
         return f"{len(hits)} address(es)" + (f": {shown}" if hits else "") + (" …" if len(hits) > 100 else "")

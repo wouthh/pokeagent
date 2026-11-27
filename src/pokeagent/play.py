@@ -499,10 +499,14 @@ class Runner:
         progress_file = self.run_dir / "state.json"
         progress = json.loads(progress_file.read_text()) if progress_file.exists() else {"sessions": 0}
         failures = started = 0
+        pending = None  # a development request, run only once the objective is judged still open
         while True:
             if verdict := objectives.judge(self.memory, self.game.observations()):
                 self.log(verdict, self.memory.status()[1])
                 return verdict
+            if pending is not None and (max_sessions is None or started < max_sessions):
+                started += self._develop(pending, progress)
+            pending = None
             if max_sessions is not None and started >= max_sessions:
                 return "max_sessions"
             started += 1
@@ -566,8 +570,7 @@ class Runner:
                 self.sleep(30 * failures)
             else:
                 failures = 0
-            if session.request is not None and (max_sessions is None or started < max_sessions):
-                started += self._develop(session.request, progress)
+            pending = session.request
 
     def _wait_for_reset(self, result: SessionResult) -> None:
         wait = max(60.0, result.resets_at - time.time()) if result.resets_at else 900.0
