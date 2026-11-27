@@ -227,6 +227,12 @@ class Memory:
         rows = self.rows(sql + " ORDER BY id DESC LIMIT ?", *args, limit)
         return [dict(row) | {"data": json.loads(row["data"])} for row in reversed(rows)]
 
+    def capability_calls(self, capability: int) -> list[dict]:
+        """Every call of one capability version across all runs sharing it, oldest first."""
+        rows = self.rows("SELECT * FROM events WHERE kind = 'capability_call' ORDER BY id")
+        calls = [dict(row) | {"data": json.loads(row["data"])} for row in rows]
+        return [e for e in calls if e["data"]["id"] == capability]
+
     def _evidence(self, event: int) -> int:
         found = self.rows(
             "SELECT 1 FROM events WHERE id = ? AND run = ? AND timeline = ? AND kind = 'action'",
