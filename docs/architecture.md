@@ -153,7 +153,8 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
   - **error:** anything else.
 
   The limit path is tested with a synthetic stream only; the first real limit stream becomes a fixture.
-- The MCP server binds to 127.0.0.1, checks host/origin, and maps each per-session bearer token to a mode. Dev
+- The MCP server binds to 127.0.0.1, checks host/origin, and maps each per-session bearer token to a mode. Play and
+  develop sessions use two ports with separate tool lists, and a token works only on its own mode's port, so develop
   sessions have no route to the live emulator.
 - Agent-written code runs only in bubblewrap: `--unshare-all --die-with-parent --new-session --clearenv`, minimal
   read-only mounts, a tmpfs, rlimits and a wall-clock timeout. A startup probe (network connect and a read of `~`
@@ -213,7 +214,7 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
   - the next brief says when the checkpoint was saved, how many actions were undone, which entries went stale and
     which note lines were dropped.
 
-## Capabilities *(declarative, phase 6a; code extensions with contracts and validation, phase 6b; develop mode planned)*
+## Capabilities *(declarative, phase 6a; code extensions with contracts and validation, phase 6b; develop mode, phase 7a)*
 
 - **Builtin:** `get_state`, `press`, `walk_to(x, y)` (whole-map grid), `walk`, `advance_text` (stops at prompts).
 - **Declarative** (`capabilities.py`): plain data that trusted code validates and interprets; no agent code runs.
@@ -279,6 +280,31 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
   - *Activation:* a tool that passes is staged (a newer validation replaces a staged version); at the next session
     start the runner takes a checkpoint, activates every staged version and the brief says so.
     `extensions.install` (check, store, activate at once) remains for trusted callers and tests.
+- **Develop mode** (`develop.py`, the develop endpoint of `server.py`, `Runner._develop`, `prompts/develop.md`):
+  - *Request:* in play, `request_development(tool, problem, evidence, expected_benefit, proposal)` names a new or
+    existing tool and cites 1-10 action events of the run; one request per session, recorded as a
+    `development_requested` event.
+  - *Policy, after that play session:* the first development cycle of a run always runs. After it, a request is
+    refused when its tool already had `--dev-attempts` cycles (2) or develop sessions have used more than
+    `--dev-share` (0.3) of the run's tokens (input + cache creation + output from each session's reported usage;
+    cache reads are excluded). Usage arrives only at a session's end, so the share is checked between sessions. A
+    refusal is a `development_decision` event that the next play brief explains.
+  - *Session:* `claude -p` with the develop prompt against the develop port, up to 200 controller actions, 300 turns
+    and `--dev-timeout` (45 min). Its `Bench` drives a second emulator started from a copy of the live state; `dev_load`
+    restarts it there or at a checkpoint of the current timeline. Its actions are not game events and write no
+    recovery state, so the live game, the run's timeline and its checkpoints stay as they were.
+  - *Tools:* the controller tools on the development game; `mem_read`, `mem_snapshot` (work RAM, at most 16),
+    `mem_diff` and `mem_search` (read-only); `fixture_save`/`fixture_load` (at most 20 per tool, 1 MB each); `ws_list`,
+    `ws_read`, `ws_write` and `ws_delete` in `run_dir/workspace/<tool>/` (relative paths only, no `..`, no links,
+    at most 200 files and 5 MB); `library_read` (an active tool's manifest and code); `validate` (at most
+    `--dev-validations`, 10); and the notes, knowledge, `list_capabilities`, `report_harness_issue` and
+    `end_session` tools both modes share, plus WebSearch/WebFetch.
+  - *Validation:* the workspace's manifest must name the requested tool. The states are the live state, the tool's
+    fixtures and the last two checkpoints, each run on a fresh emulator. A pass stages the version; it becomes
+    active at the next play session.
+  - *Records:* `session_start`/`session_end` with `"mode": "develop"` (the end carries the usage the policy counts)
+    and a `development_cycle` event (request, tool, attempt, summary, validations, staged version) that the next play
+    brief reports. A develop session counts toward `--max-sessions`.
 
 ## Verified facts
 
@@ -452,6 +478,11 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
   fingerprints whatever caused them.
 - **2026-11-27: ruff is a runtime dependency,** because validation lints agent code wherever pokeagent runs; it
   only reads the files, so it runs outside the sandbox.
+- **2026-11-27: Develop sessions get their own MCP endpoint** rather than mode checks inside one tool list: each
+  session's tool list is exactly its mode's, so a play session never sees workspace tools and a develop session's
+  controller tools cannot be pointed at the live game. The two lists share one server object and its memory.
+- **2026-11-27: Development attempts are counted per tool name,** the request's only stable key; a second request
+  for the same tool continues its workspace. A cycle cut short by a usage limit or an error still counts.
 - **2026-11-27: A tool's manifest carries its validation `examples`.** The contract runs need arguments, and the
   author of the tool is the one who knows sensible ones; each is checked against `params` first.
 - **2026-11-27: Review fixes for tools.** A macro a tool calls spends the tool's shared budget action by action; a

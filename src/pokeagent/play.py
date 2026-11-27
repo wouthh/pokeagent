@@ -21,7 +21,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from pokeagent import capabilities, extensions, objectives
+from pokeagent import capabilities, develop, extensions, objectives
 from pokeagent.agents.claude_cli import ProviderError, SessionResult, SessionSpec, preflight, run_session
 from pokeagent.capabilities import Registry
 from pokeagent.emulator.client import Emulator, EmulatorError
@@ -341,10 +341,16 @@ class Runner:
         session_timeout: float = 3600,
         model: str | None = None,
         effort: str | None = None,
+        dev_share: float = 0.3,
+        dev_attempts: int = 2,
+        dev_timeout: float = 45 * 60,
+        dev_validations: int = 10,
     ):
         run_dir = run_dir.resolve()  # the Claude child runs with cwd=run_dir, so session paths must be absolute
         self.run_dir, self.game, self.server, self.provider, self.sleep = run_dir, game, server, provider, sleep
         self.budget, self.session_timeout, self.model, self.effort = budget, session_timeout, model, effort
+        self.dev_share, self.dev_attempts, self.dev_timeout = dev_share, dev_attempts, dev_timeout
+        self.dev_validations, self.bench_class = dev_validations, develop.Bench
         self.meta = json.loads((run_dir / "run.json").read_text())
         self.memory: Memory = server.memory
         self._actions = self.restarts = 0
@@ -415,13 +421,25 @@ class Runner:
         notes = self.run_dir / "notes.md"
         observations = self.game.observations()
         lines = [f"Objective: {self.meta['objective']}", *self._checks(observations), ""]
-        last_start = (self.memory.events("session_start", limit=1) or [{"id": 0}])[0]["id"]
+        plays = [e for e in self.memory.events("session_start", limit=-1) if e["data"].get("mode") != "develop"]
+        last_start = plays[-1]["id"] if plays else 0  # what happened since the last play session began
         for restored in self.memory.events("restore", after=last_start):
             lines += [restore_notice(restored["data"]), ""]
         for rejected in self.memory.events("claim_rejected", after=last_start):
             data = rejected["data"]
             lines += [
                 f"The user rejected the completion claim ({data['claim']}): {data['why'] or 'no reason given'}",
+                "",
+            ]
+        for decision in self.memory.events("development_decision", after=last_start):
+            data = decision["data"]
+            lines += [f"Your development request for {data['tool']} did not run: {data['reason']}.", ""]
+        for cycle in self.memory.events("development_cycle", after=last_start):
+            data = cycle["data"]
+            outcome = f"version {data['staged']} validated" if data["staged"] else "nothing validated"
+            lines += [
+                f"Development session {cycle['session']} for {data['tool']} (attempt {data['attempt']}): {outcome}."
+                f" Its summary: {data['summary'] or 'none'}",
                 "",
             ]
         for kind in ("capability_rollback", "capability_activated"):
@@ -540,9 +558,7 @@ class Runner:
                 raise ProviderError(f"the Claude CLI lost its login: {result.error}")
             if result.end == "limit":
                 failures = 0
-                wait = max(60.0, result.resets_at - time.time()) if result.resets_at else 900.0
-                self.log("limit", f"waiting {wait / 60:.0f} min for the usage limit to reset")
-                self.sleep(wait)
+                self._wait_for_reset(result)
             elif result.end == "error":
                 failures += 1
                 if failures >= MAX_FAILURES:
@@ -550,6 +566,69 @@ class Runner:
                 self.sleep(30 * failures)
             else:
                 failures = 0
+            if session.request is not None and (max_sessions is None or started < max_sessions):
+                started += self._develop(session.request, progress)
+
+    def _wait_for_reset(self, result: SessionResult) -> None:
+        wait = max(60.0, result.resets_at - time.time()) if result.resets_at else 900.0
+        self.log("limit", f"waiting {wait / 60:.0f} min for the usage limit to reset")
+        self.sleep(wait)
+
+    def _develop(self, request_id: int, progress: dict) -> int:
+        """Apply the policy to a development request; run the develop session when allowed. Returns the number of
+        sessions run (0 or 1)."""
+        found = next(e for e in self.memory.events("development_requested", limit=-1) if e["id"] == request_id)
+        request = found["data"] | {"id": request_id}
+        if reason := develop.denies(self.memory, request, self.dev_share, self.dev_attempts):
+            decision = {"request": request_id, "tool": request["tool"], "reason": reason}
+            self.memory.event("development_decision", decision)
+            self.log("develop", f"request #{request_id} not run: {reason}")
+            return 0
+        cycles = self.memory.events("development_cycle", limit=-1)
+        attempt = 1 + sum(1 for cycle in cycles if cycle["data"]["tool"] == request["tool"])
+        progress["sessions"] += 1
+        number = progress["sessions"]
+        checkpoints = partial(restorable, self.run_dir, self.memory)
+        bench = self.bench_class(self.run_dir, request, self.game, Game, checkpoints, self.dev_validations)
+        session = self.server.open_session(number, develop.DEV_BUDGET, mode="develop")
+        self.server.bench = bench
+        try:
+            spec = SessionSpec(
+                brief=develop.brief(self.memory, request, bench, self.meta["objective"], attempt, self.dev_attempts),
+                system_prompt_file=PROMPTS / "develop.md",
+                mcp_url=self.server.dev_url,
+                token=session.token,
+                cwd=self.run_dir,
+                stream_path=self.run_dir / "sessions" / f"{number:04d}.jsonl",
+                web_log=self.run_dir / "web.jsonl",
+                max_turns=develop.DEV_BUDGET + 100,
+                timeout=self.dev_timeout,
+                model=self.model,
+                effort=self.effort,
+            )
+            (self.run_dir / "state.json").write_text(json.dumps(progress, indent=1) + "\n")
+            self.log("session", f"{number} start (develop {request['tool']}, attempt {attempt})")
+            self.memory.event("session_start", {"mode": "develop"}, number)
+            result: SessionResult = self.provider(spec, self.on_event)
+        finally:
+            self.server.close_session(session)
+            self.server.bench = None
+            bench.close()
+        staged = next((r["version"] for r in reversed(bench.reports) if r["passed"]), None)
+        cycle = {"request": request_id, "tool": request["tool"], "attempt": attempt, "summary": session.summary}
+        self.memory.event("development_cycle", cycle | {"validations": len(bench.reports), "staged": staged}, number)
+        ended = {"end": result.end, "turns": result.num_turns, "actions": session.actions, "mode": "develop"}
+        self.memory.event("session_end", ended | {"cost_usd": result.cost_usd, "usage": result.usage}, number)
+        self.log(
+            "end",
+            f"session {number} (develop): {result.end}, {result.num_turns} turns, {len(bench.reports)} validations,"
+            f" staged {staged or 'nothing'}, ${result.cost_usd:.2f}",
+        )
+        if result.end == "auth_error":
+            raise ProviderError(f"the Claude CLI lost its login: {result.error}")
+        if result.end == "limit":
+            self._wait_for_reset(result)
+        return 1
 
 
 def latest_state(run_dir: Path) -> bytes | None:
@@ -662,8 +741,10 @@ def play(
     effort: str | None = None,
     watch: bool = False,
     speed: float | None = None,
+    development: dict | None = None,
 ) -> str:
-    """Play a run from where it stopped (or power-on) until something stops it; return why."""
+    """Play a run from where it stopped (or power-on) until something stops it; return why. `development` holds the
+    Runner's dev_* policy settings."""
     run_dir = run_dir.resolve()
     meta = json.loads((run_dir / "run.json").read_text())
     rom = Path(meta["rom"])
@@ -692,7 +773,7 @@ def play(
             if viewer:
                 viewer.frame = game.emu.frame()
             server = GameServer(game, memory, run_dir / "notes.md", data_dir / "harness-issues.md")
-            runner = Runner(run_dir, game, server, model=model, effort=effort)
+            runner = Runner(run_dir, game, server, model=model, effort=effort, **(development or {}))
             runner.log("start", f"{meta['game']}; {version}; from {'the last state' if state else 'power-on'}")
             url = server.start()
             reason = "error"

@@ -36,6 +36,11 @@ Your own tools:
 - Defining costs little, and a macro call costs one action however many it takes. Weigh that against your
   action budget and the mistakes you see repeat. A wrong observation or macro misleads you in every later session:
   check one against the game before you rely on it, and list_capabilities shows how each has fared.
+- Observations and macros cannot compute, read results or branch beyond their conditions. When a problem keeps
+  costing actions or mistakes and they cannot handle it, you may ask for a development session with
+  request_development, citing the action events that show it. A separate session then writes and validates a code
+  tool, which becomes available through run_tool in a later play session. Development spends tokens that play does
+  not get, and pokeagent limits its share of the run, so ask when the expected saving is clear.
 
 The objective:
 - Your brief shows the objective and its success checks. pokeagent evaluates an authoritative check after every
