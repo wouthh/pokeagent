@@ -40,8 +40,13 @@ On top of that loop:
 
 ```sh
 uv sync
+uv run pokeagent fetch-cores   # once: downloads RetroArch's pinned stable cores archive (274 MB), keeps only
+                               # the checksummed cores in ~/.cache/pokeagent/cores/ and deletes the archive
 uv run pokeagent --help
 ```
+
+Emulator cores always run in a bubblewrap sandbox; if the sandbox cannot be set up (for example when unprivileged
+user namespaces are disabled), pokeagent refuses to start rather than running unsandboxed.
 
 ## What stays local and what leaves your machine
 
@@ -58,8 +63,9 @@ uv run pokeagent --help
 scripts/check.sh
 ```
 
-Runs ruff (lint and format) and the test suite, and fails if any ROM, save or state file is tracked. No ROM is
-needed.
+Runs ruff (lint and format), installs the pinned cores if missing, runs the test suite (including sandbox escape
+tests and the MIT-licensed [dmg-acid2](https://github.com/mattcurrie/dmg-acid2) test ROM), and fails if any ROM,
+save or state file is tracked. No game ROM is needed.
 
 ## Licence
 

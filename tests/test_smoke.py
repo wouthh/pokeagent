@@ -14,7 +14,5 @@ def test_version_flag(capsys):
 
 
 def test_console_script_help():
-    result = subprocess.run(
-        [sys.executable, "-m", "pokeagent", "--help"], capture_output=True, text=True, check=True
-    )
+    result = subprocess.run([sys.executable, "-m", "pokeagent", "--help"], capture_output=True, text=True, check=True)
     assert "usage: pokeagent" in result.stdout

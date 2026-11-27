@@ -43,7 +43,33 @@ Thin interfaces exist only at these seams, each with one implementation for now:
 - **Remote (third parties):** WebSearch/WebFetch requests made by the CLI from the host.
 - Nothing is published automatically.
 
-## Isolation and permissions *(planned, phases 2–7)*
+## Emulator worker *(implemented, phase 2)*
+
+- `Emulator(core, rom, options=…)` (`emulator/client.py`) starts `pokeagent.emulator.worker` through
+  `sandbox.spawn`. The core and ROM are bound read-only at `/in/`, with the default rlimits: 2 GB address space,
+  32 processes or threads, 64 MB file size and 256 open files.
+- Protocol on the worker's stdin/stdout:
+  - every message is one JSON line (at most 1 MB), and `"n": N` means N raw bytes follow (at most 16 MB);
+  - the client enforces the caps and a per-call deadline, and kills the process group if either is broken.
+- Operations:
+  - `info`, `run(buttons, frames)` (hold, then release), `frame` (RGB bytes);
+  - `read(addr, n)`: non-const memory-map regions only, so ROM is refused;
+  - `ram_hash`: sha256 of system RAM plus save RAM;
+  - `save_state` / `load_state`.
+- There is no write operation.
+- Checkpoints, timelines and the persisted input log arrive with the run store (phases 4–5), so they are written
+  once in their final SQLite form. The replay property they rely on (same state plus same inputs gives the same RAM
+  hash and the same state) is tested now.
+
+## Isolation and permissions *(sandbox implemented in phase 2; the rest planned, phases 4–7)*
+
+- `sandbox.ensure()` runs the probe once per process and raises `SandboxError` unless all of these hold:
+  - network is blocked;
+  - a canary file outside the mounts is absent;
+  - the package mount is read-only;
+  - the rlimits are in force.
+
+  Every `Emulator` calls it first.
 
 - Claude sessions run with only pokeagent's MCP server plus WebSearch/WebFetch (`--tools`, `--strict-mcp-config`,
   `--setting-sources ""`, `--permission-mode dontAsk`, `--disable-slash-commands`). Every session's `init` event is
@@ -79,7 +105,77 @@ Thin interfaces exist only at these seams, each with one implementation for now:
 
 ## Verified facts
 
-Filled in by the implementation spikes; each entry says how it was verified.
+From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 2.1.326, libretro.py 0.12.0).
+
+**Emulator (libretro.py + SameBoy 1.0.2 `be2c352` from RetroArch 1.22.2 stable)**
+
+- 59.7275 fps, 160×144. Frames arrive as XRGB8888; Pillow decodes them with raw mode `BGRA`.
+- Headless speed is about 175 emulated fps, inside bwrap as well.
+- With the default `greyscale` palette, the dmg-acid2 frame matches the reference PNG pixel for pixel. Colours are
+  0, 85, 170 and 255.
+- `serialize_size` is 252650 bytes. Replaying the same inputs from a restored state gives identical WRAM hashes and
+  identical serialized states.
+- `get_memory(SYSTEM_RAM)` returns the 8 KB WRAM at C000–DFFF. The core's memory map also exposes:
+  - HRAM (FF80, 128 B), IE (FFFF), IO (FF00) and OAM (FE00);
+  - cartridge RAM (A000, 8 KB) and VRAM (8000, 8 KB);
+  - ROM (0000 and 4000, flagged const).
+
+  `retro_memory_descriptor.view()` reads any of them.
+- A second `Session` in the same process segfaults (exit 139), so each core gets its own process.
+- **Core output:** the core prints to the process's stdout and stderr itself, even with `log=None`. The worker
+  therefore keeps RPC off fd 1.
+- **Boot ROM:** without `dmg_boot.bin` in the system directory, SameBoy logs a missing-boot-ROM line and uses its
+  built-in boot ROM.
+- **Options:** `sameboy_model` (Auto, Game Boy, GBC revisions…), `sameboy_mono_palette`, `sameboy_rtc` and others,
+  all readable through `session.options`.
+- Whether SRAM is part of a serialized state is checked once a battery-backed ROM is available (phase 3).
+
+**Sandbox (bwrap)**
+
+- libretro runs unchanged under `bwrap --unshare-all --die-with-parent --new-session --clearenv` with:
+  - read-only `/usr`, the uv Python, the venv and the package;
+  - core and ROM bound read-only;
+  - fresh `/proc`, `/dev` and a tmpfs `/tmp`.
+- Inside the sandbox:
+  - TCP connect fails (ENETUNREACH);
+  - `/etc`, `/var`, `/run/user` and the rest of `~` are absent;
+  - writes to `/usr` fail (EROFS).
+- Rlimits:
+  - `RLIMIT_NPROC` set *before* bwrap counts all of the user's processes and stops bwrap from creating
+    namespaces, so a trusted entry point sets every rlimit inside the sandbox before running anything;
+  - inside the user namespace NPROC counts only the sandbox's processes;
+  - hard limits cannot be raised again.
+
+**Claude CLI (`claude -p`, claude.ai login)**
+
+- Environment: the CLI starts under a scrubbed environment (`HOME`, `PATH`, `USER`, `LANG`), which drops the
+  `CLAUDE_*`/`ANTHROPIC_*` variables a parent agent may export. `claude auth status --json` reports `loggedIn` and
+  `authMethod` (`claude.ai`).
+- With `--setting-sources ""`, the debug log shows:
+  - the user's installed plugin is disabled;
+  - 0 hooks are registered;
+  - 0 user skills or slash commands load;
+  - no CLAUDE.md or user memory content is in context (the model confirmed).
+- The CLI's own builtin plugins still load. One of them, `cc-plugin-agents-md`, loads AGENTS.md files. Auto-memory
+  is also on.
+- `--settings` with `{"enabledPlugins": {"cc-plugin-agents-md@builtin": false}, "autoMemoryEnabled": false}`
+  removes both: `init` lists no such plugin and `memory_paths` is null.
+- `--tools "WebSearch,WebFetch"` plus `--mcp-config` and `--strict-mcp-config` yields exactly:
+  - `tools = [WebFetch, WebSearch, mcp__game__…]`;
+  - `mcp_servers = [{name: game, status: connected}]`;
+  - `slash_commands = []` and `skills = []`.
+- MCP streamable HTTP on 127.0.0.1 with a `headers.Authorization: Bearer …` entry works. Tool results with an
+  image reach the model (it described the acid2 face correctly), and tools read headers through `Context.headers`.
+- A PreToolUse hook from `--settings` runs under `--setting-sources ""`. It receives `tool_name` and `tool_input.url`
+  (or `.query`). Exit code 2 blocks the call and the block is listed in `result.permission_denials`.
+- Turn limit: `--max-turns N` ends with `subtype error_max_turns`, `terminal_reason max_turns` and exit code 1.
+- Every stream has these events:
+  - **`init`:** tools, mcp_servers, plugins, slash_commands, skills, memory_paths, permissionMode, model;
+  - **`rate_limit_event`:** `rate_limit_info.status`, `resetsAt`, `rateLimitType`, and `unifiedWindows` with
+    utilisation per five-hour and seven-day window;
+  - **`result`:** `usage` (input, cache creation, cache read, output, server tool use), `total_cost_usd`,
+    `modelUsage`, `num_turns`, `terminal_reason`, `api_error_status`.
+- Without input on stdin the CLI waits 3 s; the provider passes `stdin=DEVNULL`.
 
 ## Decisions
 
@@ -91,3 +187,16 @@ Filled in by the implementation spikes; each entry says how it was verified.
 - **2026-11-27: Python 3.13 via uv.** uv's managed CPython includes Tk (for the viewer) and SQLite FTS5.
 - **2026-11-27: Tools over MCP streamable HTTP on 127.0.0.1,** served by the long-lived `pokeagent play` process, so
   the emulator, viewer and learned data survive between Claude sessions.
+- **2026-11-27: Cores come from RetroArch's pinned stable `RetroArch_cores.7z`, not from a source build.**
+  - Source: `buildbot.libretro.com/stable/1.22.2/linux/x86_64/RetroArch_cores.7z`.
+  - Pins: the archive's sha256 (274 MB) and each extracted `.so`'s sha256 are pinned.
+  - Why not a build: building SameBoy needs `rgbds` and a C toolchain, and the per-core "latest" nightlies are not
+    pinnable.
+  - Download: once per machine into the core cache, and the archive is deleted after extraction.
+- **2026-11-27: Claude sessions run under a scrubbed environment.**
+  - `--settings` disables the CLI's builtin `cc-plugin-agents-md` plugin and auto-memory.
+  - `init` checks require every listed plugin to be builtin (`path: builtin`), with agents-md absent and
+    `memory_paths` null.
+  - `--bare` stays unused because it requires an API key instead of the claude.ai login.
+- **2026-11-27: Sandbox rlimits are applied inside the namespace** by a trusted entry point, because a pre-bwrap
+  `RLIMIT_NPROC` counts the user's whole process tree.

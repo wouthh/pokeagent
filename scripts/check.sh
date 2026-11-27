@@ -5,6 +5,7 @@ set -eu
 cd "$(dirname "$0")/.."
 uv run --frozen --quiet ruff check --quiet .
 uv run --frozen --quiet ruff format --check --quiet .
+uv run --frozen --quiet pokeagent fetch-cores >/dev/null
 out=$(uv run --frozen --quiet pytest -q -p no:cacheprovider 2>&1) || { printf '%s\n' "$out" >&2; exit 1; }
 tracked=$(git ls-files | grep -iE '\.(gb|gbc|gba|nds|sav|srm|state)$' | grep -vx 'tests/fixtures/dmg-acid2.gb' || true)
 if [ -n "$tracked" ]; then
