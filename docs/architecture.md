@@ -82,7 +82,7 @@ text is stored in the repository; `gen1_map_names.txt` holds only the map consta
 - Tests boot a new game on the user's own ROM (`POKEAGENT_ROM`, or a supported dump in the checkout's ignored
   `roms/` folder) and skip without one.
 
-## Isolation and permissions *(sandbox implemented in phase 2; the rest planned, phases 4–7)*
+## Isolation and permissions *(sandbox, Claude provider and web hook implemented; the rest planned)*
 
 - `sandbox.ensure()` runs the probe once per process and raises `SandboxError` unless all of these hold:
   - network is blocked;
@@ -92,16 +92,39 @@ text is stored in the repository; `gen1_map_names.txt` holds only the map consta
 
   Every `Emulator` calls it first.
 
-- Claude sessions run with only pokeagent's MCP server plus WebSearch/WebFetch (`--tools`, `--strict-mcp-config`,
-  `--setting-sources ""`, `--permission-mode dontAsk`, `--disable-slash-commands`). Every session's `init` event is
-  checked; unexpected tools, plugins or hooks stop the run.
+- `agents/claude_cli.py` launches each `claude -p` session itself:
+  - environment: scrubbed (`HOME`, `PATH`, `USER`, `LOGNAME`, `LANG`), with stdin from /dev/null;
+  - tools: only pokeagent's MCP server plus WebSearch/WebFetch (`--tools`, `--strict-mcp-config`), under
+    `--permission-mode dontAsk`, with no user or project settings (`--setting-sources ""`) and
+    `--disable-slash-commands`;
+  - `--settings`: disables the CLI's builtin AGENTS.md plugin and auto-memory, and installs the web hook;
+  - MCP config: written per session with mode 0600 and removed afterwards; the token is never logged.
+- Fail closed: every session's `init` event is checked (tools, MCP servers, builtin-only plugins without
+  agents-md, no skills, slash commands or memory paths, `dontAsk`). Any deviation kills the session and raises
+  `InitRejected`, which stops the run. `init` precedes the first model request, so a rejection costs no tokens.
+- How a session ended, from structured fields first:
+  - **completed:** a normal end;
+  - **max_turns:** a normal end;
+  - **limit:** a `rate_limit_event` whose status is not `allowed*`, or `api_error_status` 429; it carries
+    `resetsAt`;
+  - **auth_error:** 401/403;
+  - **timeout:** the process group was killed at the wall-clock limit;
+  - **error:** anything else.
+
+  The limit path is tested with a synthetic stream only; the first real limit stream becomes a fixture.
 - The MCP server binds to 127.0.0.1, checks host/origin, and maps each per-session bearer token to a mode. Dev
   sessions have no route to the live emulator.
 - Agent-written code runs only in bubblewrap: `--unshare-all --die-with-parent --new-session --clearenv`, minimal
   read-only mounts, a tmpfs, rlimits and a wall-clock timeout. A startup probe (network connect and a read of `~`
   must fail) fails closed.
 - No memory-write path exists. RAM reads are limited to RAM regions (never ROM banks).
-- A PreToolUse hook on WebFetch/WebSearch logs every request and blocks payload-like URLs and private hosts.
+- The PreToolUse hook (`pokeagent hook web --log …`) logs every WebFetch/WebSearch and blocks:
+  - non-http(s) URLs and credentials in URLs;
+  - local or non-public hosts (IP literals, `localhost`, dotless names, `.local`/`.lan`/`.internal`/…);
+  - token-like runs (24+ hex characters, or 32+ base64 characters mixing letters and digits);
+  - path plus query, or search text, over 200 characters.
+
+  Malformed hook input is blocked too.
 
 ## Objectives, memory, timelines *(planned)*
 
