@@ -274,3 +274,16 @@ def test_the_stuck_ladder_adds_notices_holds_actions_until_reflect_and_ends_the_
     assert s.memory.events("reflection")[0]["data"] == {"analysis": "loops", "plan": "go"}
     assert text(call(url, session.token, "press", {"button": "a"})).endswith("notice three") and session.ended
     assert "ended" in text(call(url, session.token, "press", {"button": "a"}))
+
+
+def test_a_pending_reflection_holds_actions_in_the_next_session(server):
+    s, url = server
+    s.after_action = lambda: (2, "notice two")
+    first = s.open_session(1, budget=10)
+    call(url, first.token, "press", {"button": "a"})
+    s.close_session(first)
+    s.after_action = lambda: (0, "")
+    second = s.open_session(2, budget=10)
+    assert "until you call reflect" in text(call(url, second.token, "press", {"button": "a"}))
+    call(url, second.token, "reflect", {"analysis": "loops", "plan": "go"})
+    assert not call(url, second.token, "press", {"button": "a"}).is_error

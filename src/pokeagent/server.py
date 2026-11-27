@@ -42,7 +42,6 @@ class Session:
     next_focus: str | None = None
     claim: str | None = None
     request: int | None = None  # a development request made in this session
-    must_reflect: bool = False  # the stuck ladder holds actions until reflect
     ended: bool = False
 
 
@@ -62,6 +61,7 @@ class GameServer:
         self.after_action = None  # called after every action (the runner's recovery state, checkpoints and stuck
         # ladder); returns (level the ladder climbed to or 0, notice for the agent or "")
         self.recover = None  # called with the error when the emulator fails; True once it runs again
+        self.must_reflect = False  # the stuck ladder holds actions until reflect; outlives a session
         self.broken: str | None = None  # set once the emulator fails for good; game tools then refuse
         self._uvicorn: uvicorn.Server | None = None
         self._register_tools()
@@ -150,7 +150,7 @@ class GameServer:
                 raise ToolError("this session has ended; stop now")
             if session.actions >= session.budget:
                 raise ToolError(f"the action budget ({session.budget}) is used up: update your notes, then end_session")
-            if session.must_reflect:
+            if self.must_reflect:
                 raise ToolError("pokeagent's stuck ladder holds your actions until you call reflect(analysis, plan)")
             session.actions += 1
             text, png = await on_game(call or partial(self.game.act, name, **args))
@@ -161,7 +161,7 @@ class GameServer:
             text = f"[event {self.memory.event('action', outcome, session.number)}] {text}"
             if notice:
                 text += f"\n\n{notice}"
-            session.must_reflect = session.must_reflect or climbed == 2
+            self.must_reflect = self.must_reflect or climbed == 2
             session.ended = session.ended or climbed >= 3
             return [text, Image(data=png, format="png")] if png else text
 
@@ -377,7 +377,7 @@ class GameServer:
                 raise ToolError("analysis and plan must be described")
             data = {"analysis": analysis[:2000], "plan": plan[:2000]}
             event = self.memory.event("reflection", data, session.number)
-            session.must_reflect = False
+            self.must_reflect = False
             return f"Recorded as event {event}. Carry on with your plan."
 
         @tool

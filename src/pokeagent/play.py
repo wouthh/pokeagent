@@ -487,6 +487,7 @@ class Runner:
         self.game.load_state((self.run_dir / "recovery.state").read_bytes())
         self._maps = self._visited_maps()
         self._baseline()
+        self.server.must_reflect = False  # the restored timeline starts a fresh ladder
         self.log("restore", f"{data['file']} (stuck level 4): {data['undone_actions']} actions undone")
         return True
 

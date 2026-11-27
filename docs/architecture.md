@@ -132,7 +132,7 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
 - **The ladder** (`stuck.py`, held by the runner): every 40 completed actions without progress climb a level, and a
   climb adds a notice (with knowledge hits for the current map) to that action's result and a `stuck` event:
   1. the notice only;
-  2. the action tools refuse until `reflect(analysis, plan)` (a free play tool, recorded as a `reflection` event);
+  2. the action tools refuse until `reflect(analysis, plan)` (a free play tool, recorded as a `reflection` event); the hold outlives the session, so a next session still starts held until it reflects;
   3. the session ends, and the next brief says how long the agent has been stuck and what comes next;
   4. the session ends and the runner restores the first checkpoint saved after the last progress (checkpoint
      events record the ladder instance and its best score, so checkpoints from before a resume never match) on a new timeline; with no such checkpoint it goes to level 5;
