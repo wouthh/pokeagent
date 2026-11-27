@@ -179,6 +179,9 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
 - **Options:** `sameboy_model` (Auto, Game Boy, GBC revisions…), `sameboy_mono_palette`, `sameboy_rtc` and others,
   all readable through `session.options`.
 - SameBoy refuses to serialize before the first `retro_run`, so the worker runs one frame at startup.
+- SameBoy outputs audio at 2,097,152 Hz. libretro.py's default `ArrayAudioDriver` keeps every sample (about 8 MB per
+  emulated second), which took the first live session's worker to its 2 GB address-space limit after about four
+  emulated minutes; it then stopped answering. The worker discards audio.
 - A serialized state carries the whole 32 KB cartridge RAM. After an in-game save, loading the earlier state also
   restores the earlier save data, so checkpoints need no separate `.sav` and an in-game save cannot leak between
   timelines.

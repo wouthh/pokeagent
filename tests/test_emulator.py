@@ -66,6 +66,27 @@ def test_fresh_worker_saves_and_reloads_state():
         assert e.save_state() == state
 
 
+def _tree_rss_mb(pid: int) -> int:
+    """Resident memory of a process and all its descendants (the sandbox's bwrap processes and the worker)."""
+    total, pending = 0, [pid]
+    while pending:
+        p = pending.pop()
+        status = Path(f"/proc/{p}/status").read_text()
+        total += int(next(line.split()[1] for line in status.splitlines() if line.startswith("VmRSS")))
+        for task in Path(f"/proc/{p}/task").iterdir():
+            pending += [int(c) for c in (task / "children").read_text().split()]
+    return total // 1024
+
+
+def test_worker_memory_stays_flat_while_running(emu):
+    # SameBoy emits about 2.1 M audio samples per second; keeping them would grow the worker by ~8 MB a second.
+    emu.run(frames=60)
+    before = _tree_rss_mb(emu._proc.pid)
+    for _ in range(15):
+        emu.run(frames=60)
+    assert _tree_rss_mb(emu._proc.pid) - before < 20
+
+
 def test_dead_worker_raises(tmp_path):
     e = Emulator(core_path("sameboy"), FIXTURES / "dmg-acid2.gb")
     e.close()
