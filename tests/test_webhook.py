@@ -61,3 +61,9 @@ def test_main_logs_and_blocks(tmp_path, monkeypatch, capsys):
     entries = [json.loads(line) for line in log.read_text().splitlines()]
     assert [e["blocked"] is None for e in entries] == [True, False, False]
     assert "web policy" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("url", ["http://127.0.0.1/", "https://serebii.net/"])
+def test_main_blocks_when_log_unwritable(tmp_path, monkeypatch, url):
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"tool_name": "WebFetch", "tool_input": {"url": url}})))
+    assert webhook.main(tmp_path / "missing" / "web.jsonl") == 2

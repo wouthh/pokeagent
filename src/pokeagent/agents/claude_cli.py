@@ -189,6 +189,7 @@ def run_session(
     timed_out = threading.Event()
     result = SessionResult(end="error", error="session ended without a result")
     rejected: InitRejected | None = None
+    validated = False
     try:
         proc = subprocess.Popen(
             build_argv(spec, mcp_config, claude),
@@ -220,8 +221,16 @@ def run_session(
                             check_init(event)
                         except InitRejected as e:
                             rejected = e
+                        except (AttributeError, TypeError) as e:
+                            rejected = InitRejected(f"Claude session init malformed: {e!r}")
+                        if rejected:
                             _kill(proc)
                             break
+                        validated = True
+                    elif kind in ("assistant", "user", "result") and not validated:
+                        rejected = InitRejected("Claude session produced output before a validated init event")
+                        _kill(proc)
+                        break
                     elif kind == "assistant":
                         for block in event.get("message", {}).get("content", []):
                             if block.get("type") == "text":
@@ -241,6 +250,12 @@ def run_session(
                     elif kind == "result":
                         result = _result(event, result.resets_at)
             proc.wait()
+            if not validated and not rejected and not timed_out.is_set():
+                rejected = InitRejected("Claude session ended without a validated init event")
+        except BaseException:
+            _kill(proc)
+            proc.wait()
+            raise
         finally:
             watchdog.cancel()
     finally:

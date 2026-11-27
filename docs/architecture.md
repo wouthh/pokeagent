@@ -101,7 +101,9 @@ text is stored in the repository; `gen1_map_names.txt` holds only the map consta
   - MCP config: written per session with mode 0600 and removed afterwards; the token is never logged.
 - Fail closed: every session's `init` event is checked (tools, MCP servers, builtin-only plugins without
   agents-md, no skills, slash commands or memory paths, `dontAsk`). Any deviation kills the session and raises
-  `InitRejected`, which stops the run. `init` precedes the first model request, so a rejection costs no tokens.
+  `InitRejected`, which stops the run. A missing or malformed `init`, or any assistant/user/result event before a
+  validated one, is rejected the same way; any other exception in the session loop kills and reaps the process group.
+  The web hook blocks (exit 2) when its log cannot be written. `init` precedes the first model request, so a rejection costs no tokens.
 - How a session ended, from structured fields first:
   - **completed:** a normal end;
   - **max_turns:** a normal end;

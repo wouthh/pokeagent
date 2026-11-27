@@ -73,8 +73,11 @@ def main(log: Path) -> int:
         reason = decide(tool, tool_input)
     except (ValueError, KeyError, TypeError, AttributeError):
         tool, tool_input, reason = None, None, "malformed hook input"
-    with log.open("a") as f:
-        f.write(json.dumps({"time": time.time(), "tool": tool, "input": tool_input, "blocked": reason}) + "\n")
+    try:
+        with log.open("a") as f:
+            f.write(json.dumps({"time": time.time(), "tool": tool, "input": tool_input, "blocked": reason}) + "\n")
+    except (OSError, TypeError, ValueError):
+        reason = reason or "web log unavailable"
     if reason:
         print(f"Blocked by pokeagent's web policy: {reason}.", file=sys.stderr)
         return 2
