@@ -1,4 +1,5 @@
 import sqlite3
+import time
 
 import pytest
 
@@ -129,3 +130,19 @@ def test_knowledge_scopes_evidence_and_search(tmp_path):
     blue.set_knowledge_status(general, "hypothesis", superseded_by=newer)
     blue.set_knowledge_status(family, "refuted")
     assert [e["id"] for e in blue.search(query, 10)] == [newer]
+
+
+def test_superseding_needs_a_replacement_as_wide_and_restore_drops_later_progress(tmp_path):
+    red = open_memory(tmp_path)
+    general = red.add_knowledge("lesson", "Menus", "read the cursor", scope="general")
+    narrow = red.add_knowledge("lesson", "Menus", "red only", scope="rom")
+    with pytest.raises(ValueError, match="widely scoped"):
+        red.set_knowledge_status(general, "hypothesis", superseded_by=narrow)
+    red.set_knowledge_status(narrow, "hypothesis", superseded_by=general)
+
+    red.add_knowledge("progress", "Badge", "earned", scope="run")
+    red.event("checkpoint", {"file": "1.state", "reason": "test"})
+    time.sleep(0.01)
+    red.add_knowledge("progress", "Parcel", "delivered", scope="run")
+    red.discard_progress_after("1.state")
+    assert {e["topic"] for e in red.search("badge parcel", 10)} == {"Badge"}

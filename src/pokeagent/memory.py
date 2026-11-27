@@ -292,6 +292,8 @@ class Memory:
         for known in (entry, superseded_by):
             if known and not self._visible(known):
                 raise ValueError(f"unknown knowledge entry {known}")
+        if superseded_by and self._breadth(superseded_by) < self._breadth(entry):
+            raise ValueError("a replacement must be at least as widely scoped as the entry it supersedes")
         self.write(
             "UPDATE knowledge SET status = ?, evidence = COALESCE(?, evidence),"
             " superseded_by = COALESCE(?, superseded_by), updated = ? WHERE id = ?",
@@ -301,6 +303,23 @@ class Memory:
             time.time(),
             entry,
         )
+
+    def _breadth(self, entry: int) -> int:
+        scope = self.rows("SELECT scope FROM knowledge WHERE id = ?", entry)[0]["scope"]
+        return list(self.scopes.values()).index(scope)  # run narrowest, general widest
+
+    def discard_progress_after(self, checkpoint_file: str) -> None:
+        """Refute this run's progress knowledge recorded after the checkpoint `checkpoint_file`: restoring it loses
+        that game progress, so it must not be offered as fact."""
+        found = [e for e in self.events("checkpoint", limit=1000) if e["data"]["file"] == checkpoint_file]
+        if found:
+            self.write(
+                "UPDATE knowledge SET status = 'refuted', updated = ? WHERE run = ? AND kind = 'progress'"
+                " AND created > ? AND status != 'refuted'",
+                time.time(),
+                self.run,
+                found[-1]["created"],
+            )
 
     def _visible(self, entry: int) -> bool:
         return bool(
