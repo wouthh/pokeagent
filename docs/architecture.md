@@ -311,7 +311,7 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
     a checkpoint, and staged the tool. The develop prompt now says that tests call the tool through `ctx.call`.
   - *Records:* `session_start`/`session_end` with `"mode": "develop"` (the end carries the usage the policy counts)
     and a `development_cycle` event (request, tool, attempt, summary, validations, staged version) that the next play
-    brief reports. A develop session counts toward `--max-sessions`.
+    brief reports. A develop session counts toward `--max-sessions`. A request left unhandled when a run stops (the session limit, a crash) is recovered from its event on the next invocation.
 
 ## Verified facts
 

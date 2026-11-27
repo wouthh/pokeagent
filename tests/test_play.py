@@ -200,6 +200,25 @@ def test_a_development_request_runs_a_develop_session_within_the_policy(tmp_path
     ]
 
 
+def test_a_request_left_by_the_session_limit_runs_on_resume(tmp_path):
+    runner, _, _ = make_runner(tmp_path, [(SessionResult("completed"), None)] * 2)
+    runner.bench_class, runner.dev_attempts, runner.server.dev_url = FakeBench, 1, "http://127.0.0.1:2/mcp"
+    replay, modes = runner.provider, []
+
+    def scripted(spec, on_event):
+        session = runner.server.sessions[spec.token]
+        modes.append(session.mode)
+        if session.mode == "play" and not runner.memory.events("development_requested"):
+            ask = {"tool": "step", "evidence": [], "problem": "p", "expected_benefit": "b", "proposal": "q"}
+            session.request = runner.memory.event("development_requested", ask, session.number)
+        return replay(spec, on_event)
+
+    runner.provider = scripted
+    assert runner.loop("http://127.0.0.1:1/mcp", max_sessions=1) == "max_sessions" and modes == ["play"]
+    assert runner.loop("http://127.0.0.1:1/mcp", max_sessions=1) == "max_sessions" and modes == ["play", "develop"]
+    assert len(runner.memory.events("development_cycle")) == 1
+
+
 def test_a_run_that_succeeded_during_play_skips_its_development_request(tmp_path):
     runner, briefs, _ = make_runner(tmp_path, [(SessionResult("completed"), None)])
     runner.bench_class, runner.dev_attempts, runner.server.dev_url = FakeBench, 1, "http://127.0.0.1:2/mcp"
