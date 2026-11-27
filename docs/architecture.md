@@ -258,7 +258,7 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
   - *`ctx` (API 1):* `state()`, `observe(name)`, `read(address, length)` (RAM only, at most 64 bytes),
     `screen_text()`, `press(button, times)`, `hold(buttons, frames)`, `wait(frames)`, `call(name, **args)` (a
     builtin action, a macro or another tool), `log(message)`, `kv` (durable per tool and scope, in the memory store)
-    and `tkv` (`tkv.json` in the run directory, saved with every checkpoint and put back by a restore). Each store
+    and `tkv` (`tkv.json` in the run directory, saved with every checkpoint and every action's recovery snapshot, and put back by a restore or an emulator restart). Each store
     holds at most 64 KB of JSON.
   - *Contract, enforced by the orchestrator:* arguments against `params` and the `preconditions` before the call
     (a refusal does not count against the tool); during it one budget shared by every nested call (18,000 frames,
@@ -458,3 +458,7 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
   closed protocol pipe waits only until the call's deadline; the trusted contract runs start from fresh copies of
   the real stores, so the agent's own tests cannot decide whether they pass; an existing `capabilities` table is
   rebuilt once to allow kind `tool` and status `staged`, keeping its versions.
+- **2026-11-27: Review fixes for tools, round 2.** A call refuses a tool whose `compatibility.roms` excludes the
+  current ROM (a family-scoped tool is visible to every ROM in the family); a nested request that fails after
+  changing the game still gets the caller's invariants checked; every action's recovery snapshot also holds the
+  timeline store (`recovery.tkv.json`), so an emulator restart undoes a failed action's `ctx.tkv` writes too.

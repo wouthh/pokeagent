@@ -206,6 +206,9 @@ class Runner:
             jsonschema.validate(args, spec["params"])
         except jsonschema.ValidationError as e:
             raise Refused(f"{spec['name']}: arguments do not match its params: {e.message}") from None
+        rom = game.registry.memory.scopes["rom"].split(":", 1)[1]
+        if (roms := spec["compatibility"].get("roms")) and rom not in roms:  # a family-scoped tool can reach other ROMs
+            raise Refused(f"{spec['name']}: this ROM is not in the tool's compatibility list")
         before_obs = game._observations()
         if "preconditions" in spec and not objectives.holds(spec["preconditions"], before_obs):
             raise Refused(
@@ -296,12 +299,22 @@ class Runner:
             case "kv_get" | "kv_set" | "tkv_get" | "tkv_set":
                 return self._store(capability, method, args)
             case "press" | "hold" | "wait" | "call":
-                result = self._act(method, args, budget, depth)
-                self._spend(budget, 0)  # a compound builtin may have run past the frame limit
-                if "invariants" in spec and not objectives.holds(spec["invariants"], game._observations()):
-                    raise _Violation(f"{spec['name']}: invariant failed ({objectives.describe(spec['invariants'])})")
+                try:
+                    result = self._act(method, args, budget, depth)
+                    self._spend(budget, 0)  # a compound builtin may have run past the frame limit
+                except _Violation:
+                    raise
+                except Exception:  # a failed request may have changed the game first: the contract still holds
+                    self._check_invariants(spec, game)
+                    raise
+                self._check_invariants(spec, game)
                 return result
         raise ValueError(f"unknown ctx request {method!r}")
+
+    @staticmethod
+    def _check_invariants(spec: dict, game) -> None:
+        if "invariants" in spec and not objectives.holds(spec["invariants"], game._observations()):
+            raise _Violation(f"{spec['name']}: invariant failed ({objectives.describe(spec['invariants'])})")
 
     def _charge(self, action: str, args: dict, budget: Budget):
         """One builtin action of a macro, under the tool's shared budget."""

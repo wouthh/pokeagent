@@ -389,6 +389,8 @@ class Runner:
             state = self.game.save_state()  # one emulator save: a second one could fail after the action is committed
             try:
                 write_atomic(self.run_dir / "recovery.state", state)
+                tkv = self.run_dir / "tkv.json"  # the tools' timeline store is part of the recovery snapshot
+                _put(self.run_dir / "recovery.tkv.json", tkv.read_bytes() if tkv.exists() else None)
             except OSError as e:  # the emulator is ahead of the file: report it as failed so it restarts from the file
                 raise EmulatorError(f"the recovery state could not be written: {e}") from e
             self._actions += 1
@@ -402,6 +404,9 @@ class Runner:
                 return False
             self.restarts += 1
             self.game.restart(latest_state(self.run_dir))
+            if (self.run_dir / "recovery.state").exists():  # undo a failed action's store writes with its game changes
+                saved = self.run_dir / "recovery.tkv.json"
+                _put(self.run_dir / "tkv.json", saved.read_bytes() if saved.exists() else None)
         self.memory.event("restart", {"error": error})
         self.log("restart", f"the emulator was restarted after: {error}")
         return True
@@ -598,6 +603,7 @@ def restore(run_dir: Path, memory: Memory, name: str) -> dict:
     old_state = (run_dir / "recovery.state").read_bytes() if (run_dir / "recovery.state").exists() else None
     try:
         write_atomic(run_dir / "recovery.state", path.read_bytes())
+        _put(run_dir / "recovery.tkv.json", new_tkv)
         write_atomic(notes, new_notes.encode())
         write_atomic(progress_file, (json.dumps(restored, indent=1) + "\n").encode())
         _put(tkv, new_tkv)
@@ -605,6 +611,7 @@ def restore(run_dir: Path, memory: Memory, name: str) -> dict:
     except BaseException:
         if old_state is not None:
             write_atomic(run_dir / "recovery.state", old_state)
+        _put(run_dir / "recovery.tkv.json", old_tkv)
         write_atomic(notes, old_notes.encode())
         write_atomic(progress_file, (json.dumps(progress, indent=1) + "\n").encode())
         _put(tkv, old_tkv)

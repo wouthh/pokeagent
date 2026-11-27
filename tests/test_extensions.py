@@ -347,3 +347,23 @@ def test_an_old_capability_table_is_widened_once(tmp_path):
     assert [c["name"] for c in registry.active()] == ["old"]
     registry.define("tool", {"name": "t"}, "rom", 1, staged=True)
     assert [c["name"] for c in registry.staged()] == ["t"]
+
+
+def test_a_family_tool_restricted_to_other_roms_is_refused_here(world):
+    tool = world.add("red_only", "return 1", compatibility={"family": "pokemon-gen1", "roms": ["red"]})
+    assert Runner(world).call(tool, {}) == 1
+    world.registry.memory.scopes["rom"] = "rom:blue"
+    with pytest.raises(Refused, match="this ROM is not in the tool's compatibility list"):
+        Runner(world).call(tool, {})
+
+
+def test_a_failed_nested_call_cannot_hide_a_broken_invariant(world):
+    world.add("child", "ctx.press('select')\nreturn 'x'", effects=["money"], returns={"type": "integer"})
+    parent = world.add(
+        "parent",
+        "try:\n    ctx.call('child')\nexcept Exception:\n    return 'caught'",
+        effects=["money"],
+        invariants={"obs": "money", "op": ">=", "value": 100},
+    )
+    with pytest.raises(CapabilityError, match="invariant failed"):
+        Runner(world).call(parent, {})
