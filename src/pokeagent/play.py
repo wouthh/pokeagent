@@ -434,9 +434,9 @@ class Runner:
             self.checkpoint(f"badge {state['badges']}", saved)
         if not climbed:
             return 0, ""
-        self.show(f"session {self.number} (play)")
         self._climbed = max(self._climbed, climbed)
         self.memory.event("stuck", {"level": climbed, "since": self.ladder.since}, self.number)
+        self.show(f"session {self.number} (play)")  # after the event: the panel reads the latest stuck level
         self.log("stuck", f"level {climbed} after {self.ladder.since} actions without progress")
         notice = stuck.describe(climbed, self.ladder.since)
         if hits := self.memory.search(state["map"], 3):
