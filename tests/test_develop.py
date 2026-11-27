@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from pokeagent import develop
@@ -14,7 +16,7 @@ class DevGame:
     """The development game: work RAM is a bytearray and a state is a copy of it."""
 
     def __init__(self, emu, adapter, **kw):
-        self.emu, self.ram = emu, bytearray(develop.WRAM[1])
+        self.emu, self.ram, self.kw = emu, bytearray(develop.WRAM[1]), kw
 
     def save_state(self):
         return bytes(self.ram)
@@ -31,6 +33,7 @@ class DevGame:
 
 class Live:
     adapter = registry = library = None
+    tkv = Path("/run/live/tkv.json")
 
     def save_state(self):
         return bytes(develop.WRAM[1])
@@ -104,7 +107,7 @@ def test_fixtures_and_memory_tools_use_the_development_game(bench, monkeypatch):
         bench.load("1.state")
 
 
-def test_validate_needs_the_requested_tools_files(bench):
+def test_validate_needs_the_requested_tools_files(bench, monkeypatch):
     with pytest.raises(ValueError, match=r"needs manifest\.json, tool\.py, test_tool\.py"):
         bench.validate("rom", 1, set(), set())
     bench.ws_write("manifest.json", '{"name": "other"}')
@@ -112,6 +115,11 @@ def test_validate_needs_the_requested_tools_files(bench):
     bench.ws_write("test_tool.py", "")
     with pytest.raises(ValueError, match='"name": "step"'):
         bench.validate("rom", 1, set(), set())
+    bench.ws_write("manifest.json", '{"name": "step"}')
+    trials = []
+    monkeypatch.setattr(develop.validation, "validate", lambda trial, *args: trials.append(trial) or {"passed": False})
+    bench.validate("rom", 1, set(), set())
+    assert trials[0].kw["tkv"] == Live.tkv  # contract runs start from the live timeline store
     bench.reports = [{}] * 10
     with pytest.raises(ValueError, match="10 validations are used up"):
         bench.validate("rom", 1, set(), set())
