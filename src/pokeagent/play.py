@@ -293,7 +293,10 @@ class Runner:
     def _after_action(self) -> None:
         with self._after_lock:
             state = self.game.save_state()  # one emulator save: a second one could fail after the action is committed
-            write_atomic(self.run_dir / "recovery.state", state)
+            try:
+                write_atomic(self.run_dir / "recovery.state", state)
+            except OSError as e:  # the emulator is ahead of the file: report it as failed so it restarts from the file
+                raise EmulatorError(f"the recovery state could not be written: {e}") from e
             self._actions += 1
             if self._actions % CHECKPOINT_EVERY == 0:
                 self.checkpoint(f"{self._actions} actions", state)

@@ -8,7 +8,7 @@ import pytest
 from pokeagent import objectives
 from pokeagent import play as play_module
 from pokeagent.agents.claude_cli import ProviderError, SessionResult
-from pokeagent.emulator.client import Emulator
+from pokeagent.emulator.client import Emulator, EmulatorError
 from pokeagent.emulator.cores import core_path
 from pokeagent.games.pokemon_gen1 import CORE, CORE_OPTIONS, DEFAULT_CHECK, HALL_OF_FAME
 from pokeagent.memory import Memory
@@ -222,6 +222,19 @@ def test_every_action_saves_the_recovery_state_and_a_restart_loads_it(tmp_path):
     assert latest_state(runner.run_dir) == b"state 2"
     assert [runner.recover("worker exited") for _ in range(4)] == [True, True, True, False]
     assert runner.game.restarts == [b"state 2"] * 3 and len(runner.memory.events("restart")) == 3
+
+
+def test_a_failed_recovery_write_is_an_emulator_failure_so_the_server_restarts(tmp_path, monkeypatch):
+    runner, _, _ = make_runner(tmp_path, [])
+    runner.server.after_action()
+
+    def full_disk(path, data):
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr("pokeagent.play.write_atomic", full_disk)
+    with pytest.raises(EmulatorError, match="no space left"):
+        runner.server.after_action()
+    assert runner.recover("write failed") and runner.game.restarts == [b"state 1"]
 
 
 def test_overlapping_actions_never_leave_an_older_recovery_state(tmp_path):

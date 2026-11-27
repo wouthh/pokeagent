@@ -111,7 +111,7 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
   - `error`: backs off 30 s, 60 s, …; five in a row stop the run;
   - `completed`, `max_turns` and `timeout` continue with the next session.
   - If the emulator worker fails, a new one starts at `recovery.state` (or the latest checkpoint, or power-on) and
-    the failed call reports that it had no effect, so at most that one action is lost. After three restarts in one
+    the failed call reports that it had no effect, so at most that one action is lost. A failed `recovery.state` write (disk full) counts as an emulator failure, so the emulator rolls back to the last written state. After three restarts in one
     `play`, every game tool refuses with the reason and the run stops after the session.
 - **Resume** loads `recovery.state` (else the latest checkpoint, else power-on). Notes and progress are current with
   it, so nothing is replayed or restored.
