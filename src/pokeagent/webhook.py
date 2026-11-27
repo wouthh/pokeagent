@@ -33,7 +33,9 @@ def _host_problem(host: str) -> str | None:
     try:
         ip = ipaddress.ip_address(host.strip("[]"))
     except ValueError:
-        if host == "localhost" or "." not in host or host.endswith(_LOCAL_SUFFIXES):
+        # A numeric last label (127.1, 0x7f.0.0.1) is an alternate IPv4 spelling; TLDs are never numeric.
+        numeric_tld = re.fullmatch(r"\d+|0x[0-9a-f]*", host.rstrip(".").rsplit(".", 1)[-1], re.IGNORECASE)
+        if host == "localhost" or "." not in host or numeric_tld or host.endswith(_LOCAL_SUFFIXES):
             return f"local host {host}"
         return None
     return None if ip.is_global else f"non-public address {host}"

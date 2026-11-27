@@ -24,6 +24,10 @@ def test_allows_ordinary_pages(url):
     [
         "http://localhost:8080/",
         "http://127.0.0.1/mcp",
+        "http://127.1/",
+        "http://0x7f.0.0.1/",
+        "http://0x7f.1/",
+        "http://127.0.0.1./",
         "http://10.0.0.5/",
         "http://192.168.1.1/admin",
         "http://[::1]/",
