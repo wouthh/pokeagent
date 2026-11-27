@@ -494,8 +494,7 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
   author of the tool is the one who knows sensible ones; each is checked against `params` first.
 - **2026-11-27: Review fixes for tools.** A macro a tool calls spends the tool's shared budget action by action; a
   closed protocol pipe waits only until the call's deadline; the trusted contract runs start from fresh copies of
-  the real stores, so the agent's own tests cannot decide whether they pass; an existing `capabilities` table is
-  rebuilt once to allow kind `tool` and status `staged`, keeping its versions.
+  the real stores, so the agent's own tests cannot decide whether they pass.
 - **2026-11-27: Review fixes for tools, round 2.** A call refuses a tool whose `compatibility.roms` excludes the
   current ROM (a family-scoped tool is visible to every ROM in the family); a nested request that fails after
   changing the game still gets the caller's invariants checked; every action's recovery snapshot also holds the
