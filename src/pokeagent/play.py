@@ -260,6 +260,7 @@ class Runner:
 
     def restore_context(self, checkpoint: Path) -> None:
         """Replace the notes and progress with the ones saved at `checkpoint` (the discarded timeline's are dropped)."""
+        self.memory.discard_progress_after(checkpoint.name)
         for name in CONTEXT_FILES:
             saved = checkpoint.with_suffix(f".{name}")
             if saved.exists():

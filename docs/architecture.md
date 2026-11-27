@@ -350,3 +350,6 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
   database for every writer, so a bug in pokeagent cannot quietly rewrite a run's objective or history either.
 - **2026-11-27: Knowledge is confirmed only by evidence from the run's own game,** an action event of its current
   timeline. Web pages and the agent's own reasoning produce hypotheses; the brief and searches show the status.
+- **2026-11-27: Restoring a checkpoint refutes progress knowledge recorded after it, and a replacement must be at
+  least as widely scoped as the entry it supersedes.** The lost game progress must not be offered as fact on resume,
+  and a narrow replacement would hide a shared entry from runs that cannot see the replacement.
