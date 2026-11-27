@@ -254,18 +254,7 @@ class Registry:
     def __init__(self, memory: Memory):
         self.memory = memory
         with memory.lock:
-            old = memory.db.execute("SELECT sql FROM sqlite_master WHERE name = 'capabilities'").fetchone()
-            migrate = old is not None and "'tool'" not in old[0]  # one-time: widen kind and status, keep versions
-            if migrate:
-                memory.db.executescript(
-                    "DROP TRIGGER IF EXISTS capabilities_fixed; DROP TRIGGER IF EXISTS capabilities_kept;"
-                    " ALTER TABLE capabilities RENAME TO capabilities_old;"
-                )
             memory.db.executescript(SCHEMA)
-            if migrate:
-                memory.db.executescript(
-                    "INSERT INTO capabilities SELECT * FROM capabilities_old; DROP TABLE capabilities_old;"
-                )
 
     def _scopes(self) -> list[str]:
         return [self.memory.scopes["rom"], self.memory.scopes["family"]]

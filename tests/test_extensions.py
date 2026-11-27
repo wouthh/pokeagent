@@ -333,22 +333,6 @@ def test_contract_runs_do_not_see_what_the_agents_tests_wrote(world):
     assert not report["passed"] and "no flag" in report["steps"][-1]["detail"], report
 
 
-def test_an_old_capability_table_is_widened_once(tmp_path):
-    memory = Memory(tmp_path / "memory.db", "run-1")
-    memory.open_run({"objective": "x", "rom_sha1": "red", "family": "pokemon-gen1"})
-    memory.db.executescript(
-        "CREATE TABLE capabilities (id INTEGER PRIMARY KEY, name TEXT NOT NULL, version INTEGER NOT NULL,"
-        " kind TEXT NOT NULL CHECK (kind IN ('observation', 'macro')), scope TEXT NOT NULL, spec TEXT NOT NULL,"
-        " status TEXT NOT NULL CHECK (status IN ('active', 'previous', 'retired')), run TEXT NOT NULL,"
-        " session INTEGER, created REAL NOT NULL, UNIQUE (name, scope, version));"
-        " INSERT INTO capabilities VALUES (1, 'old', 1, 'macro', 'rom:red', '{}', 'active', 'r', NULL, 0);"
-    )
-    registry = Registry(memory)
-    assert [c["name"] for c in registry.active()] == ["old"]
-    registry.define("tool", {"name": "t"}, "rom", 1, staged=True)
-    assert [c["name"] for c in registry.staged()] == ["t"]
-
-
 def test_a_family_tool_restricted_to_other_roms_is_refused_here(world):
     tool = world.add("red_only", "return 1", compatibility={"family": "pokemon-gen1", "roms": ["red"]})
     assert Runner(world).call(tool, {}) == 1
