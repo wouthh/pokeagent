@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from pokeagent import objectives
+from pokeagent import play as play_module
 from pokeagent.agents.claude_cli import ProviderError, SessionResult
 from pokeagent.emulator.client import Emulator
 from pokeagent.emulator.cores import core_path
@@ -277,6 +278,30 @@ def test_restore_branches_a_timeline_and_the_brief_says_what_changed(tmp_path):
     assert "restored to the checkpoint saved" in briefs[0] and "3 later actions were undone" in briefs[0]
     assert f"now stale: #{delivered}" in briefs[0] and "  Oak gave me the Pokédex" in briefs[0]
     assert "Last session's summary: left Pallet" in briefs[0] and "This is session 5" in briefs[0]
+
+
+def test_restore_that_fails_writing_files_leaves_the_run_unchanged(tmp_path, monkeypatch):
+    runner, _, _ = make_runner(tmp_path, [(SessionResult("completed"), None)])
+    memory, run_dir = runner.memory, runner.run_dir
+    (run_dir / "notes.md").write_text("old notes\n")
+    runner.checkpoint("session 1")
+    checkpoint = restorable(run_dir, memory)[-1]["data"]["file"]
+    runner.server.after_action()
+    (run_dir / "notes.md").write_text("later notes\n")
+    before, timeline = latest_state(run_dir), memory.timeline()
+    real = play_module.write_atomic
+
+    def failing(path, data):
+        if path.name == "notes.md" and data == b"old notes\n":
+            raise OSError("disk full")
+        real(path, data)
+
+    monkeypatch.setattr(play_module, "write_atomic", failing)
+    with pytest.raises(OSError):
+        restore(run_dir, memory, checkpoint)
+    monkeypatch.setattr(play_module, "write_atomic", real)
+    assert memory.timeline() == timeline and latest_state(run_dir) == before
+    assert (run_dir / "notes.md").read_text() == "later notes\n"
 
 
 def test_restore_refuses_a_checkpoint_of_another_core_setup(tmp_path):
