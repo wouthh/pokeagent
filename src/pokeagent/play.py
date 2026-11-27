@@ -258,13 +258,15 @@ class Runner:
         self.memory.event("checkpoint", {"file": path.name, "reason": reason})
         self.log("checkpoint", f"{path.name} ({reason})")
 
-    def restore_context(self, checkpoint: Path) -> None:
-        """Replace the notes and progress with the ones saved at `checkpoint` (the discarded timeline's are dropped)."""
-        self.memory.discard_progress_after(checkpoint.name)
-        self.memory.event("restore", {"file": checkpoint.name})  # actions before this belong to a discarded attempt
+    def restore_context(self, checkpoint: Path | None) -> None:
+        """Replace the notes and progress with the ones saved at `checkpoint`, or drop them for a power-on restart
+        (the discarded timeline's are dropped)."""
+        self.memory.discard_progress_after(checkpoint.name if checkpoint else None)
+        # actions before this belong to a discarded attempt
+        self.memory.event("restore", {"file": checkpoint.name if checkpoint else None})
         for name in CONTEXT_FILES:
-            saved = checkpoint.with_suffix(f".{name}")
-            if saved.exists():
+            saved = checkpoint.with_suffix(f".{name}") if checkpoint else None
+            if saved and saved.exists():
                 shutil.copyfile(saved, self.run_dir / name)
             else:
                 (self.run_dir / name).unlink(missing_ok=True)
@@ -444,8 +446,7 @@ def play(
                 viewer.frame = emu.frame()
             server = GameServer(game, memory, run_dir / "notes.md", data_dir / "harness-issues.md")
             runner = Runner(run_dir, game, server, model=model, effort=effort)
-            if checkpoints:
-                runner.restore_context(checkpoints[-1])
+            runner.restore_context(checkpoints[-1] if checkpoints else None)
             origin = checkpoints[-1].name if checkpoints else "power-on"
             runner.log("start", f"{meta['game']}; {version}; from {origin}")
             url = server.start()

@@ -146,3 +146,11 @@ def test_superseding_needs_a_replacement_as_wide_and_restore_drops_later_progres
     red.add_knowledge("progress", "Parcel", "delivered", scope="run")
     red.discard_progress_after("1.state")
     assert {e["topic"] for e in red.search("badge parcel", 10)} == {"Badge"}
+
+
+def test_power_on_restore_refutes_all_progress(tmp_path):
+    red = open_memory(tmp_path)
+    red.add_knowledge("progress", "Parcel", "acquired", scope="run")
+    red.add_knowledge("lesson", "Menus", "read the cursor", scope="general")
+    red.discard_progress_after(None)
+    assert {e["topic"] for e in red.search("parcel menus", 10)} == {"Menus"}

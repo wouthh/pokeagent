@@ -219,3 +219,11 @@ def test_new_runs_record_their_checks_and_settled_runs_do_not_resume(rom_path, t
     objectives.claim(memory, "the agent reported the objective complete: badge")
     with pytest.raises(ValueError, match="settle it with `pokeagent objective confirm"):
         play(run_dir, tmp_path / "b")
+
+
+def test_power_on_restore_drops_notes_and_marks_a_discarded_attempt(tmp_path):
+    runner, _, _ = make_runner(tmp_path, [])
+    (runner.run_dir / "notes.md").write_text("lost notes")
+    runner.restore_context(None)
+    assert not (runner.run_dir / "notes.md").exists()
+    assert runner.memory.events("restore", limit=1)[0]["data"] == {"file": None}

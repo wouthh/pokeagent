@@ -308,18 +308,22 @@ class Memory:
         scope = self.rows("SELECT scope FROM knowledge WHERE id = ?", entry)[0]["scope"]
         return list(self.scopes.values()).index(scope)  # run narrowest, general widest
 
-    def discard_progress_after(self, checkpoint_file: str) -> None:
-        """Refute this run's progress knowledge recorded after the checkpoint `checkpoint_file`: restoring it loses
-        that game progress, so it must not be offered as fact."""
-        found = [e for e in self.events("checkpoint", limit=1000) if e["data"]["file"] == checkpoint_file]
-        if found:
-            self.write(
-                "UPDATE knowledge SET status = 'refuted', updated = ? WHERE run = ? AND kind = 'progress'"
-                " AND created > ? AND status != 'refuted'",
-                time.time(),
-                self.run,
-                found[-1]["created"],
-            )
+    def discard_progress_after(self, checkpoint_file: str | None) -> None:
+        """Refute this run's progress knowledge recorded after the checkpoint `checkpoint_file` (None: since
+        power-on): restoring it loses that game progress, so it must not be offered as fact."""
+        since = 0.0
+        if checkpoint_file is not None:
+            found = [e for e in self.events("checkpoint", limit=1000) if e["data"]["file"] == checkpoint_file]
+            if not found:
+                return
+            since = found[-1]["created"]
+        self.write(
+            "UPDATE knowledge SET status = 'refuted', updated = ? WHERE run = ? AND kind = 'progress'"
+            " AND created > ? AND status != 'refuted'",
+            time.time(),
+            self.run,
+            since,
+        )
 
     def _visible(self, entry: int) -> bool:
         return bool(
