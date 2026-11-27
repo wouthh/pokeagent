@@ -1,6 +1,6 @@
 import json
 
-from pokeagent import cli, stats
+from pokeagent import cli, play, stats
 from pokeagent.memory import Memory
 
 META = {"objective": "finish the game", "rom_sha1": "red", "family": "pokemon-gen1"}
@@ -95,3 +95,15 @@ def test_an_interrupted_session_is_reported(tmp_path):
     (row,) = stats.sessions(memory)
     assert (row["end"], row["actions"], row["milestones"], row["mode"]) == ("interrupted", 1, 1, "play")
     assert "interrupted" in stats.report(memory)
+
+
+def test_the_open_session_of_a_live_run_is_running(tmp_path):
+    memory = Memory(tmp_path / "memory.db", "r")
+    memory.open_run(META)
+    memory.event("session_start", {}, 1)
+    memory.event("session_start", {}, 2)
+    assert not stats.live(tmp_path)
+    with play.run_lock(tmp_path):
+        assert stats.live(tmp_path)
+        assert [r["end"] for r in stats.sessions(memory, stats.live(tmp_path))] == ["interrupted", "running"]
+    assert not stats.live(tmp_path)
