@@ -20,6 +20,8 @@ first use case, not an architectural constraint. Design and decisions: [docs/arc
     the session loop. `viewer.py`: the `--watch` window. `prompts/play.md`: the play-mode system prompt.
   - `memory.py`: the SQLite store (runs, success checks, timelines, events, knowledge with FTS5) whose triggers
     keep objectives, checks and events immutable. `objectives.py`: the check grammar, judging and claims.
+  - `capabilities.py`: the agent's declarative observations and macros (validation, interpreter, versioned
+    registry with rollback).
   - `agents/claude_cli.py`: the Claude CLI provider (preflight, isolated argv, fail-closed `init` check, stream
     parsing, end classification). `webhook.py`: the `pokeagent hook web` policy for WebFetch/WebSearch.
 - `tests/`: pytest suite; runs without any game ROM. `tests/fixtures/` holds the MIT dmg-acid2 test ROM, its
