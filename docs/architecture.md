@@ -203,8 +203,8 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
     authority is blocked rather than interpreted;
   - local or non-public hosts (private and loopback IPv4, `localhost`, dotless names, numeric last labels such as
     `127.1`, `.local`/`.lan`/`.internal`/…), compared without a trailing DNS dot;
-  - token-like runs (24+ hex characters, or 32+ base64 characters mixing letters and digits), also in the hostname and
-    in percent-decoded text;
+  - token-like runs (24+ hex characters, or 32+ base64 characters mixing letters and digits, where a slash ends a
+    run so a path of words is not one), also in the hostname and in percent-decoded text;
   - path plus query, or search text, over 200 characters.
 
   Malformed hook input is blocked too.
@@ -406,6 +406,28 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
 - Harness problems found and fixed: the worker's audio buffer filled its memory limit (first attempt), power-on RAM
   crashed the state reader (second attempt), and stale menus after a press (agent notes). The only tool errors in the
   run were calls after the action budget was used up.
+
+**Live run 1 (2026-11-27, phase 8: run 1a resumed for 37 more sessions, the 40-session experiment)**
+
+- Sessions 4 to 40 played without intervention: 3,655 actions in 181 minutes of sessions, 3.1 million tokens
+  (cache reads excluded) and $62.15, about $1.70 and 5 minutes per session. No usage limit wait, emulator restart or
+  harness issue occurred.
+- From the Pewter City Pokémon Center to Silph Co. 9F: five badges (sessions 5, 8, 18, 25 and 35), 107 maps and 14
+  species owned, read from milestone events. By the agent's summaries, consistent with the maps it reached, it also
+  got the S.S. Ticket, Cut, Flash, the Silph Scope and the Poké Flute.
+- Declarative self-improvement (A12) happened unprompted. The agent defined 32 macros and 2 RAM observations
+  (`battle_my_hp`, `enemy_species`), five of the macros in a second version after it saw them misbehave. It called
+  29 of them 437 times, and one call failed. They covered battle turns, trainer intros, healing round trips, grinding,
+  fishing and a Rocket Hideout spinner route, and the observations let a stall macro stop when its HP got low.
+  Its 36 knowledge entries are routes, lessons, mechanics and technical facts, all confirmed by it.
+- Programmatic self-improvement (A13) did not happen: no session called `request_development`. Battles, routes and
+  menus were all within reach of macros with conditions, and nothing in the logs shows the agent meeting a
+  problem it said they could not handle.
+- The stuck ladder reached level 1 six times (shopping, long dialogs and a stall battle) and never level 2. One
+  `reflect` call came unasked at level 1, noting that damage dealt in a long battle does not count as progress.
+- Tool errors were almost all action calls after the budget ran out (42 of 56), plus definition mistakes the
+  validator caught. The web hook blocked three fetches of pret disassembly files as token-like: the slashes of the
+  path made one long base64 run. A slash now ends a run.
 
 **Sandbox (bwrap)**
 

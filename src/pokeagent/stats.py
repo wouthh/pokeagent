@@ -137,6 +137,8 @@ def compare(a: Memory, b: Memory) -> str:
 def status(memory: Memory, run_dir: Path, now: str = "") -> str:
     """A few lines on where a run stands: `pokeagent status` and the viewer panel."""
     state, reason = memory.status()
+    if state == "running" and not live(run_dir):  # the store says running until the run ends or pauses
+        state = "stopped, resume continues it"
     meta = json.loads((run_dir / "run.json").read_text())
     progress_file = run_dir / "state.json"
     progress = json.loads(progress_file.read_text()) if progress_file.exists() else {}

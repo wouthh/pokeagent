@@ -15,7 +15,9 @@ from pathlib import Path
 from urllib.parse import unquote
 
 MAX_PAYLOAD = 200
-_TOKEN_RUNS = (re.compile(r"[0-9a-fA-F]{24,}"), re.compile(r"[A-Za-z0-9+/=]{32,}"))
+# A slash ends a base64 run like - and _ do: otherwise a path of words (/repos/pret/pokered/contents/maps/Route9)
+# is one long run. Longer payloads are capped at MAX_PAYLOAD anyway.
+_TOKEN_RUNS = (re.compile(r"[0-9a-fA-F]{24,}"), re.compile(r"[A-Za-z0-9+=]{32,}"))
 _LOCAL_SUFFIXES = (".local", ".localhost", ".internal", ".lan", ".home", ".arpa")
 # Only a plain host name or IPv4 address and an optional port, then a printable-ASCII path. The fetcher's URL parser
 # differs from Python's (backslashes, percent-encoding, Unicode dots, userinfo, IPv6 literals), so any authority
