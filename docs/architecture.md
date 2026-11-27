@@ -226,7 +226,7 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
     `repeat`, or `until`/`while` (conditions in the success-check grammar over builtin and agent observations) with
     a required `max`. `params` is a JSON schema for `run_macro`'s args, referenced in steps as `{"$arg": "x"}`.
     Steps and conditions are checked when the macro is defined; it is not run then.
-  - *Calls:* `run_macro` is one action of the session budget; inside it a call runs at most 200 builtin actions and
+  - *Calls:* `run_macro` is one action of the session budget; inside it a call runs at most 200 builtin actions, 5000 loop iterations and nested calls in total, and
     4 nested macros. Arguments that do not match `params` are refused and not counted; a step's error or an `until`
     that never held fails the call, which still reports the state it left behind.
   - *Versions and scope:* every definition is a new immutable version (`capabilities` table, triggers) scoped to

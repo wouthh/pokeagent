@@ -23,6 +23,7 @@ NAME = re.compile(r"[a-z][a-z0-9_]{1,39}")
 MAX_READ = 64  # bytes per observation
 MAX_STEPS = 20  # steps per macro
 MACRO_ACTIONS = 200  # builtin actions per macro call, nested macros included
+MACRO_WORK = 5000  # loop iterations and nested calls per macro call, so loops that do no action are bounded too
 MAX_DEPTH = 4  # macros calling macros
 ROLLBACK = (3, 10)  # failures within the last calls of a version that roll it back
 
@@ -197,17 +198,27 @@ def check_args(spec: dict, args: dict) -> None:
         raise CapabilityError(f"{spec['name']}: arguments do not match its params: {e.message}") from None
 
 
+def _holds(condition: dict, observe) -> bool:
+    try:
+        return objectives.holds(condition, observe())
+    except TypeError as e:  # e.g. a text observation compared with a number
+        raise CapabilityError(f"condition {objectives.describe(condition)} cannot be evaluated: {e}") from None
+
+
 def execute(spec: dict, args: dict, act, observe, lookup, budget: list[int] | None = None, depth: int = 0) -> list[str]:
     """Run a macro: `act(name, args)` runs one builtin action and returns its outcome, `observe()` returns the
     observations for conditions and `lookup(name)` an active macro. Returns the outcomes; CapabilityError on failure."""
     check_args(spec, args)
-    budget = budget if budget is not None else [MACRO_ACTIONS]
+    budget = budget if budget is not None else [MACRO_ACTIONS, MACRO_WORK]
     outcomes = []
     for number, step in enumerate(spec["steps"], 1):
         step_args = _substitute(step.get("args", {}), args)
         times = step.get("max") or step.get("repeat", 1)
         for _ in range(times):
-            if "while" in step and not objectives.holds(step["while"], observe()):
+            if budget[1] <= 0:
+                raise CapabilityError(f"{spec['name']}: a macro call may take at most {MACRO_WORK} steps in total")
+            budget[1] -= 1
+            if "while" in step and not _holds(step["while"], observe):
                 break
             if step["do"] == "macro":
                 if depth + 1 > MAX_DEPTH:
@@ -219,7 +230,7 @@ def execute(spec: dict, args: dict, act, observe, lookup, budget: list[int] | No
                     raise CapabilityError(f"{spec['name']}: a macro call may take at most {MACRO_ACTIONS} actions")
                 budget[0] -= 1
                 outcomes.append(act(step["do"], step_args))
-            if "until" in step and objectives.holds(step["until"], observe()):
+            if "until" in step and _holds(step["until"], observe):
                 break
         else:
             if "until" in step:

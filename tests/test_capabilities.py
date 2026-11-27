@@ -149,6 +149,24 @@ def test_a_macro_call_is_bounded():
         execute(deep["m0"], {}, world.act, world.observe, deep.__getitem__)
 
 
+def test_loops_that_do_no_action_are_bounded_and_bad_conditions_fail_cleanly():
+    world = World()
+
+    def level(i, steps):
+        return {"name": f"m{i}", "params": {"type": "object"}, "steps": steps}
+
+    never = {"obs": "x", "op": "<", "value": 0}
+    specs = {f"m{i}": level(i, [{"do": "macro", "args": {"name": f"m{i + 1}"}, "repeat": 200}]) for i in range(4)}
+    specs["m4"] = level(4, [{"do": "walk", "while": never, "max": 200}])
+    with pytest.raises(CapabilityError, match="steps in total"):
+        execute(specs["m0"], {}, world.act, world.observe, specs.__getitem__)
+    assert world.done == []
+
+    text = level(0, [{"do": "walk", "until": {"obs": "x", "op": "<", "value": 3}, "max": 2}])
+    with pytest.raises(CapabilityError, match="cannot be evaluated"):
+        execute(text, {}, world.act, lambda: {"x": b"ab"}, None)
+
+
 def test_registry_versions_scopes_and_rollback(tmp_path):
     red = Memory(tmp_path / "memory.db", "run-1")
     red.open_run({"objective": "x", "rom_sha1": "red", "family": "pokemon-gen1"})
