@@ -101,19 +101,29 @@ def validate(
         )
         if not step("ruff", lint.returncode == 0, lint.stdout or lint.stderr):
             return _record(registry, report, session)
+        live_tkv = game.tkv
+        baseline = live_tkv.read_bytes() if live_tkv and live_tkv.exists() else None
         game.registry, game.tkv = _Trial(registry, candidate), folder / "tkv.json"
         try:
             passed = _tests(game, candidate, folder, fixtures, states[0][1], step) and _contract(
-                game, candidate, states, step
+                game, candidate, states, step, baseline
             )
         except EmulatorError as e:
             passed = step("emulator", False, f"the validation emulator failed: {e}")
         finally:
-            game.registry = registry
+            game.registry, game.tkv = registry, live_tkv
     if passed:
         staged = registry.define("tool", spec, scope, session, staged=True)
         report |= {"passed": True, "version": staged["version"]}
     return _record(registry, report, session)
+
+
+def _reset_tkv(tkv: Path, baseline: bytes | None) -> None:
+    """A scratch copy of the live timeline store (absent when the live one is)."""
+    if baseline is None:
+        tkv.unlink(missing_ok=True)
+    else:
+        tkv.write_bytes(baseline)
 
 
 def _tests(game, candidate: dict, folder: Path, fixtures: dict, live: bytes, step) -> bool:
@@ -130,7 +140,7 @@ def _tests(game, candidate: dict, folder: Path, fixtures: dict, live: bytes, ste
     return step("tests", bool(results) and not failed, detail if results else "test_tool.py has no test_* function")
 
 
-def _contract(game, candidate: dict, states: list[tuple[str, bytes]], step) -> bool:
+def _contract(game, candidate: dict, states: list[tuple[str, bytes]], step, baseline: bytes | None) -> bool:
     ran = 0
     for label, state in states:
         if ran == MAX_STATES:
@@ -139,7 +149,7 @@ def _contract(game, candidate: dict, states: list[tuple[str, bytes]], step) -> b
         for args in candidate["spec"]["examples"]:
             game.emu.load_state(state)
             game.registry.stores.clear()  # every trusted run starts from empty scratch stores
-            game.tkv.unlink(missing_ok=True)
+            _reset_tkv(game.tkv, baseline)
             try:
                 extensions.Runner(game).call(candidate, args)
                 outcomes.append("ok")

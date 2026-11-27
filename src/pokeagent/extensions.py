@@ -313,7 +313,13 @@ class Runner:
 
     @staticmethod
     def _check_invariants(spec: dict, game) -> None:
-        if "invariants" in spec and not objectives.holds(spec["invariants"], game._observations()):
+        if "invariants" not in spec:
+            return
+        try:
+            held = objectives.holds(spec["invariants"], game._observations())
+        except (TypeError, KeyError) as e:  # unevaluable (type mismatch, observation missing on this ROM): not held
+            raise _Violation(f"{spec['name']}: invariant cannot be evaluated ({e!r})") from None
+        if not held:
             raise _Violation(f"{spec['name']}: invariant failed ({objectives.describe(spec['invariants'])})")
 
     def _charge(self, action: str, args: dict, budget: Budget):
