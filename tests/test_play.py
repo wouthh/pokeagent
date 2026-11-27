@@ -187,6 +187,16 @@ def test_resume_restores_the_notes_and_progress_saved_with_the_checkpoint(tmp_pa
     assert len(list(folder.glob("*.notes.md"))) == len(list(folder.glob("*.state"))) == 10
 
 
+def test_restore_marks_earlier_actions_as_a_discarded_attempt(tmp_path):
+    runner, _, _ = make_runner(tmp_path, [])
+    runner.checkpoint("a")
+    runner.memory.event("action", {"outcome": "lost parcel"}, 1)
+    runner.restore_context(sorted((runner.run_dir / "checkpoints").glob("*.state"))[-1])
+    runner.memory.event("action", {"outcome": "kept"}, 1)
+    after = runner.memory.events("restore", limit=1)[0]["id"]
+    assert [e["data"]["outcome"] for e in runner.memory.events("action", session=1, after=after)] == ["kept"]
+
+
 def test_a_relative_run_dir_becomes_absolute(tmp_path, monkeypatch):
     runner, _, _ = make_runner(tmp_path, [])
     monkeypatch.chdir(tmp_path)
