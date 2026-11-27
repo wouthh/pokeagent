@@ -166,6 +166,10 @@ def test_loops_that_do_no_action_are_bounded_and_bad_conditions_fail_cleanly():
     with pytest.raises(CapabilityError, match="cannot be evaluated"):
         execute(text, {}, world.act, lambda: {"x": b"ab"}, None)
 
+    missing = level(0, [{"do": "walk", "until": {"obs": "gone", "op": "<", "value": 3}, "max": 2}])
+    with pytest.raises(CapabilityError, match="cannot be evaluated"):
+        execute(missing, {}, world.act, world.observe, None)
+
 
 def test_registry_versions_scopes_and_rollback(tmp_path):
     red = Memory(tmp_path / "memory.db", "run-1")

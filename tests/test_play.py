@@ -243,6 +243,9 @@ def test_observations_and_macros_on_the_rom(game, tmp_path):
         "nowhere",
         [{"do": "press", "args": {"button": "b"}, "until": {"obs": "map_id", "op": "==", "value": 200}, "max": 2}],
     )
+    define("badtype", [{"do": "walk", "args": {"direction": []}}])
+    _, _, _, error = live.run_macro("badtype", {})
+    assert error and "direction must be one of" in error
     text, _, macro, error = live.run_macro("nowhere", {})
     assert "until did not hold after 2 times" in error and text.startswith("run_macro nowhere: failed:")
     assert "Now: Reds House 2F" in text and macro["name"] == "nowhere"
