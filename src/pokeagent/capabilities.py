@@ -116,6 +116,8 @@ def check_macro(spec: dict, observations: set[str], macros: set[str], taken: set
         jsonschema.Draft202012Validator.check_schema(params)
     except jsonschema.SchemaError as e:
         raise CapabilityError(f"params is not a valid JSON schema: {e.message}") from None
+    if _has_ref(params):
+        raise CapabilityError("params may not use $ref or $dynamicRef: the orchestrator never fetches schemas")
     if params.get("type") != "object":
         raise CapabilityError('params must be a JSON schema of "type": "object"')
     steps = spec.get("steps")
@@ -158,6 +160,12 @@ def _check_step(step, observations: set[str], macros: set[str], arguments: set[s
         raise CapabilityError(f"repeat must be 1..{MACRO_ACTIONS}")
 
 
+def _has_ref(schema) -> bool:
+    if isinstance(schema, dict):
+        return any(k in ("$ref", "$dynamicRef") or _has_ref(v) for k, v in schema.items())
+    return isinstance(schema, list) and any(_has_ref(v) for v in schema)
+
+
 def _arg_refs(value):
     if isinstance(value, dict):
         if set(value) == {"$arg"}:
@@ -173,6 +181,8 @@ def _arg_refs(value):
 def _substitute(value, args: dict):
     if isinstance(value, dict):
         if set(value) == {"$arg"}:
+            if value["$arg"] not in args:
+                raise CapabilityError(f"argument {value['$arg']!r} was not given")
             return args[value["$arg"]]
         return {key: _substitute(item, args) for key, item in value.items()}
     if isinstance(value, list):
@@ -276,7 +286,7 @@ class Registry:
         call = {"id": capability["id"], "name": capability["name"], "version": capability["version"], "error": error}
         self.memory.event("capability_call", call, session)
         failures, window = ROLLBACK
-        recent = [e for e in self.memory.events("capability_call", limit=-1) if e["data"]["id"] == capability["id"]]
+        recent = self.memory.capability_calls(capability["id"])
         if error and sum(1 for e in recent[-window:] if e["data"]["error"]) >= failures:
             return self.rollback(capability, f"{failures} of its last {window} calls failed", session)
         return None
@@ -300,7 +310,7 @@ class Registry:
 
     def usage(self, capability: dict) -> tuple[int, int]:
         """(calls, failures) of this version."""
-        calls = [e for e in self.memory.events("capability_call", limit=-1) if e["data"]["id"] == capability["id"]]
+        calls = self.memory.capability_calls(capability["id"])
         return len(calls), sum(1 for e in calls if e["data"]["error"])
 
 

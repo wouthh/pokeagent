@@ -175,3 +175,28 @@ def test_registry_versions_scopes_and_rollback(tmp_path):
     assert [c["name"] for c in shared.active("macro")] == ["heal"]
     with pytest.raises(CapabilityError, match="no active observation"):
         shared.get("hp_low", "observation")
+
+
+def test_params_refuse_references_and_missing_arguments_fail_cleanly():
+    remote = {"type": "object", "$ref": "http://127.0.0.1:1/schema"}
+    with pytest.raises(CapabilityError, match=r"\$ref"):
+        check_macro(macro([{"do": "walk"}], remote), set(), set(), BUILTIN)
+    optional = {"type": "object", "properties": {"button": {"type": "string"}}}
+    spec = check_macro(
+        macro([{"do": "press", "args": {"button": {"$arg": "button"}}}], optional), set(), set(), BUILTIN
+    )
+    with pytest.raises(CapabilityError, match="was not given"):
+        execute(spec, {}, lambda *a: "ok", lambda: {}, lambda n: None)
+
+
+def test_failures_count_across_runs_sharing_a_version(tmp_path):
+    first = Memory(tmp_path / "memory.db", "run-1")
+    first.open_run({"objective": "x", "rom_sha1": "red", "family": "pokemon-gen1"})
+    cap = Registry(first).define("observation", check_observation(observation(decode="u8"), BUILTIN), "rom", 1)
+    assert Registry(first).record(cap, "boom", 1) is None
+    assert Registry(first).record(cap, "boom", 1) is None
+    second = Memory(tmp_path / "memory.db", "run-2")
+    second.open_run({"objective": "x", "rom_sha1": "red", "family": "pokemon-gen1"})
+    later = Registry(second)
+    assert "rolled back" in later.record(cap, "boom", 1)
+    assert later.usage(cap) == (3, 3)
