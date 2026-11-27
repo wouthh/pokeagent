@@ -82,7 +82,8 @@ def _reached(memory: Memory) -> dict[str, dict]:
         waited = sum(w["data"]["seconds"] for w in waits if w["created"] < m["created"])
         found[m["data"]["text"]] = {
             "session": m["session"],
-            "actions": sum(1 for a in actions if a < m["id"]),
+            # the runner records a milestone just before the action that reached it: count that action too
+            "actions": sum(1 for a in actions if a < m["id"]) + 1,
             "tokens": sum(develop.tokens(e["data"].get("usage")) for e in charged),
             "cost": sum(e["data"]["cost_usd"] for e in charged),
             "minutes": max(0.0, m["created"] - begun - waited) / 60,

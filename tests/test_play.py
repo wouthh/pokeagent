@@ -115,7 +115,9 @@ def test_a_claim_pauses_the_run_until_the_user_settles_it(tmp_path):
         return provider(spec, on_event)
 
     provider, runner.provider = runner.provider, claiming
+    runner.game.viewer = SimpleNamespace(panel="")
     assert runner.loop("url") == "claimed"
+    assert "claimed" in runner.game.viewer.panel.splitlines()[0]
     assert runner.memory.status() == ("claimed", "the agent reported the objective complete: a Pikachu is in the party")
     objectives.reject(runner.memory, "that is a Raichu")
     runner.provider = provider
@@ -316,7 +318,9 @@ def test_success_is_judged_before_a_stuck_restore(tmp_path):
         return replay(spec, on_event)
 
     runner.provider = acting
+    runner.game.viewer = SimpleNamespace(panel="")
     assert runner.loop("url") == "complete" and not runner.memory.events("restore")
+    assert "complete" in runner.game.viewer.panel.splitlines()[0]
 
 
 def test_the_viewer_panel_follows_the_run(tmp_path):
