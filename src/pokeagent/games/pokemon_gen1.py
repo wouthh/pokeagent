@@ -274,6 +274,7 @@ class Gen1:
                 "enemy_max_hp": int.from_bytes(emu.read(ENEMY_MAX_HP, 2)),
             }
         badges = emu.read(BADGES, 1)[0]
+        player_name = decode(emu.read(PLAYER_NAME, 11))
         return {
             "map_id": map_id,
             "map": MAP_NAMES[map_id] if map_id < len(MAP_NAMES) else f"map {map_id:#04x}",
@@ -283,7 +284,7 @@ class Gen1:
             "map_size": [m[11] * 2, m[10] * 2],
             "screen": self.screen_mode(tiles, bool(battle_kind)),
             "screen_text": [line for line in self.screen_text(tiles) if line.strip()],
-            "player_name": decode(emu.read(PLAYER_NAME, 11)),
+            "player_name": player_name,
             "rival_name": decode(emu.read(RIVAL_NAME, 11)),
             "party": party,
             "bag": bag,
@@ -293,6 +294,8 @@ class Gen1:
             "dex_owned": sum(b.bit_count() for b in emu.read(DEX_OWNED, 19)),
             "dex_seen": sum(b.bit_count() for b in emu.read(DEX_SEEN, 19)),
             "battle": battle,
+            # Before a game is started or loaded, WRAM holds power-on noise (SameBoy randomises it) or zeros.
+            "in_game": bool(m[10] and m[11]) and bool(player_name) and "·" not in player_name,
         }
 
     def grid(self, emu: Emulator) -> Grid:
@@ -372,7 +375,46 @@ class Gen1:
             "dex_owned": state["dex_owned"],
             "money": state["money"],
             "in_battle": state["battle"] is not None,
+            "in_game": state["in_game"],
         }
+
+    @staticmethod
+    def state_text(state: dict) -> str:
+        """The state as a few lines for the model."""
+        screen = state["screen"]
+        flags = [f for f in ("yes_no", "waiting") if screen[f]]
+        if not state["in_game"]:
+            text = "\n".join("  " + line for line in state["screen_text"]) or "  (no text)"
+            return (
+                f"No game is in progress yet (power-on, title screen, intro or naming), so map, party and other RAM"
+                f" values are not meaningful. Screen: {screen['mode']}"
+                + (f" ({', '.join(flags)})" if flags else "")
+                + f".\nScreen text:\n{text}"
+            )
+        width, height = state["map_size"]
+        lines = [
+            f"Map: {state['map']} (id {state['map_id']:#04x}, {width}x{height} steps); you are at "
+            f"({state['x']},{state['y']}) facing {state['facing']}. Screen: {screen['mode']}"
+            + (f" ({', '.join(flags)})" if flags else "")
+            + (f", cursor at column {screen['cursor_at'][0]} row {screen['cursor_at'][1]}" if screen["cursor"] else ""),
+            f"Player {state['player_name']}, rival {state['rival_name']}. Money {state['money']}, badges "
+            f"{state['badges']}/8, Pokédex owned {state['dex_owned']} seen {state['dex_seen']}.",
+        ]
+        party = [
+            f"{p['name']} ({p['species']}) L{p['level']} HP {p['hp']}/{p['max_hp']} {p['status']} "
+            f"[{', '.join(p['moves'])}]"
+            for p in state["party"]
+        ]
+        lines.append("Party: " + ("; ".join(party) if party else "none"))
+        lines.append("Bag: " + (", ".join(f"{b['item']} x{b['qty']}" for b in state["bag"]) or "empty"))
+        if battle := state["battle"]:
+            lines.append(
+                f"Battle ({battle['kind']}): {battle['enemy']} L{battle['enemy_level']} "
+                f"HP {battle['enemy_hp']}/{battle['enemy_max_hp']}"
+            )
+        if state["screen_text"]:
+            lines.append("Screen text:\n" + "\n".join("  " + line for line in state["screen_text"]))
+        return "\n".join(lines)
 
     # ---- macro actions (controller input only) ----
 

@@ -68,30 +68,6 @@ def test_screen_mode():
 # ---- on the user's ROM ----
 
 
-@pytest.fixture(scope="module")
-def game(rom_path):
-    """(adapter, emulator, state of a new game standing in the bedroom). Boots once; tests load the state."""
-    gen1 = Gen1(rom_path.read_bytes())
-    with Emulator(core_path("sameboy"), rom_path, options=CORE_OPTIONS) as emu:
-        emu.run([], 300)
-        for _ in range(60):  # title screen until the CONTINUE/NEW GAME menu
-            if gen1.screen_mode(gen1.screen_tiles(emu), False)["cursor"]:
-                break
-            gen1.press(emu, "start", wait=40)
-        gen1.press(emu, "a", wait=30)
-        names = 0
-        for _ in range(40):  # Oak's speech; take the first preset name (below NEW NAME) for player and rival
-            outcome = gen1.advance_text(emu)["outcome"]
-            state = gen1.state(emu)
-            if outcome == "menu":
-                x, y = state["screen"]["cursor_at"]
-                assert gen1.choose(emu, gen1.screen_text(gen1.screen_tiles(emu))[y + 2][x + 1 :].split()[0])
-                names += 1
-            elif names == 2 and state["map_size"] != [0, 0]:
-                break
-        yield gen1, emu, emu.save_state()
-
-
 def test_new_game_starts_in_the_bedroom(game):
     gen1, emu, bedroom = game
     emu.load_state(bedroom)
@@ -99,7 +75,7 @@ def test_new_game_starts_in_the_bedroom(game):
     assert (state["map"], state["x"], state["y"]) == ("Reds House 2F", 3, 6)
     assert {state["player_name"], state["rival_name"]} == {"RED", "BLUE"}  # Blue swaps the preset names
     assert (state["party"], state["badges"], state["money"]) == ([], 0, 3000)
-    assert state["screen"]["mode"] == "overworld"
+    assert state["screen"]["mode"] == "overworld" and state["in_game"]
     assert (gen1.species_name(0x99), gen1.item_name(0x04), gen1.move_name(1)) == ("BULBASAUR", "POKé BALL", "POUND")
 
 
@@ -147,3 +123,11 @@ def test_state_restores_the_in_game_save(game):
     assert gen1.advance_text(emu)["outcome"] == "closed"
     emu.load_state(bedroom)
     assert emu.ram_hash() == before
+
+
+def test_power_on_is_not_a_game_in_progress(rom_path):
+    gen1 = Gen1(rom_path.read_bytes())
+    with Emulator(core_path("sameboy"), rom_path, options=CORE_OPTIONS) as emu:
+        state = gen1.state(emu)
+    assert not state["in_game"] and not gen1.observations(state)["in_game"]
+    assert gen1.state_text(state).startswith("No game is in progress yet")
