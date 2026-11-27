@@ -499,7 +499,17 @@ class Runner:
         progress_file = self.run_dir / "state.json"
         progress = json.loads(progress_file.read_text()) if progress_file.exists() else {"sessions": 0}
         failures = started = 0
-        pending = None  # a development request, run only once the objective is judged still open
+        # A development request, run only once the objective is judged still open. A request left unhandled by a
+        # previous invocation (stopped by --max-sessions or a crash) is recovered from its event.
+        handled = {
+            e["data"]["request"]
+            for kind in ("development_decision", "development_cycle")
+            for e in self.memory.events(kind, limit=-1)
+        }
+        open_requests = [
+            e["id"] for e in self.memory.events("development_requested", limit=-1) if e["id"] not in handled
+        ]
+        pending = open_requests[-1] if open_requests else None
         while True:
             if verdict := objectives.judge(self.memory, self.game.observations()):
                 self.log(verdict, self.memory.status()[1])
