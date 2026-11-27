@@ -154,3 +154,14 @@ def test_power_on_restore_refutes_all_progress(tmp_path):
     red.add_knowledge("lesson", "Menus", "read the cursor", scope="general")
     red.discard_progress_after(None)
     assert {e["topic"] for e in red.search("parcel menus", 10)} == {"Menus"}
+
+
+def test_restore_revives_progress_superseded_after_the_checkpoint(tmp_path):
+    red = open_memory(tmp_path)
+    old = red.add_knowledge("progress", "Parcel", "acquired", scope="run")
+    red.event("checkpoint", {"file": "1.state", "reason": "test"})
+    time.sleep(0.01)
+    new = red.add_knowledge("progress", "Parcel", "delivered", scope="run")
+    red.set_knowledge_status(old, "stale", superseded_by=new)
+    red.discard_progress_after("1.state")
+    assert [e["id"] for e in red.search("parcel", 10)] == [old]
