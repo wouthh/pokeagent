@@ -317,6 +317,18 @@ class Memory:
             if not found:
                 return
             since = found[-1]["created"]
+        # an older entry that a later (now refuted) one superseded is live again; "stale" came from that replacement
+        self.write(
+            "UPDATE knowledge SET superseded_by = NULL, updated = ?,"
+            " status = CASE WHEN status = 'stale' THEN 'hypothesis' ELSE status END"
+            " WHERE run = ? AND kind = 'progress' AND created <= ? AND superseded_by IN"
+            " (SELECT id FROM knowledge WHERE run = ? AND kind = 'progress' AND created > ?)",
+            time.time(),
+            self.run,
+            since,
+            self.run,
+            since,
+        )
         self.write(
             "UPDATE knowledge SET status = 'refuted', updated = ? WHERE run = ? AND kind = 'progress'"
             " AND created > ? AND status != 'refuted'",
