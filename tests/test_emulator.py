@@ -63,3 +63,17 @@ def test_dead_worker_raises(tmp_path):
     e.close()
     with pytest.raises(EmulatorError, match="exited"):
         e.run()
+
+
+def test_stalled_worker_times_out_while_writing():
+    import subprocess
+    import time
+
+    e = Emulator(core_path("sameboy"), FIXTURES / "dmg-acid2.gb", timeout=0.5)
+    e.close()
+    e._proc = subprocess.Popen(["sleep", "30"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, start_new_session=True)
+    t = time.monotonic()
+    with pytest.raises(EmulatorError, match="did not accept"):
+        e.load_state(b"\0" * 1_000_000)  # larger than the pipe buffer; nothing reads it
+    assert time.monotonic() - t < 5
+    e.close()
