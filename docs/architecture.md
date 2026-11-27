@@ -95,7 +95,7 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
   `web.jsonl` (the web hook's log). Harness issues go to `<data dir>/harness-issues.md`.
 - **Objective:** only the adapter's default objective gets its trusted check (Red/Blue: the Hall of Fame map),
   evaluated before every session once a game is in progress (power-on RAM is noise that could match by chance).
-  A custom objective has no check yet and runs until stopped; proposed and user checks arrive with phase 5.
+  A custom objective has only the user's `--success` check, if any (see Objectives below).
 - **`server.py`:** the `game` MCP server on a free 127.0.0.1 port, in a background thread. A per-session bearer
   token is checked before MCP sees a request, and the Host header must name this server. Tools: `get_state`
   (full text, whole-map ASCII, 3x screenshot; free), the actions `press`, `walk`, `walk_to` and `advance_text`
@@ -168,13 +168,34 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
 
   Malformed hook input is blocked too.
 
-## Objectives, memory, timelines *(planned)*
+## Objectives, memory, timelines *(objectives and knowledge implemented in phase 5a; timelines planned)*
 
-- The objective text and authoritative success checks (from the user, or the adapter for the default objective) are
-  immutable. Agent-proposed checks are recorded but only pause the run for confirmation.
-- Memory separates goals, milestones, knowledge (world, technical, strategy, lesson, limitation, progress; hypothesis
-  versus confirmed; with provenance and scope by run, ROM sha1, game family or general), capabilities, sessions,
-  events and inputs.
+- **Store:** `<data dir>/memory.db`, one SQLite database shared by every run so knowledge carries across runs. A run is
+  recorded from its `run.json` the first time it is opened; afterwards the database decides and `run.json` must
+  agree. Triggers enforce the rules for every writer:
+  - `runs`: the objective and ROM never change; status is `running`, `claimed` or `complete`.
+  - `checks`: condition, source and reason never change and no check is deleted. Sources are `adapter` (the default
+    objective's trusted check), `user` (`--success`, or an approved proposal) and `agent`. An agent's check is never
+    `active` (authoritative); only `proposed` moves to `approved` or `rejected`.
+  - `events`: append-only (actions, session starts and ends with usage and cost, checkpoints, claims).
+  - `knowledge`: topic and content never change and nothing is deleted; status (`hypothesis`, `confirmed`,
+    `refuted`, `stale`), evidence and `superseded_by` do. FTS5 indexes topic and content.
+  - `timelines`: every run starts on one; restores (planned) branch new ones. Events and knowledge record theirs.
+- **Conditions:** `{"obs", "op", "value"}` over the adapter's observations, combined with `all`, `any` and `not`.
+- **Judging,** before every session once a game is in progress: an active check that holds completes the run. The
+  agent's latest proposed check that holds, or `report_objective_complete` without any active check, sets the run to
+  `claimed`. A claimed or complete run does not resume. `pokeagent objective confirm` completes a claimed run;
+  `reject --reason` resumes it, rejects the claim's check so it cannot pause the run again and tells the agent why
+  in the next brief; `approve-check` makes the latest proposal a user check.
+- **Knowledge tools:** `knowledge_add`, `knowledge_search`, `knowledge_set_status`. Scope is `run`, `rom` (sha1),
+  `family` or `general`; a search sees its own run, its ROM, its family and general entries, without refuted or
+  superseded ones. Entries are hypotheses; one is confirmed only with evidence, an `action` event of this run's
+  current timeline (every action result starts with `[event N]`). An entry with a url (from the web) starts as a
+  hypothesis whatever the evidence. `progress` entries are always run-scoped.
+- **Brief:** objective; each check with its source and whether it holds now; the latest proposal; the observations
+  with their values; a rejected claim; the last summary (or one generated from the session's last actions when it
+  ended without `end_session`); notes; the top 5 knowledge entries matching the current map and the planned focus;
+  the current state.
 - Restoring a checkpoint opens a new timeline: timeline-bound state (goals, milestones, notes, progress knowledge,
   timeline KV) reverts; durable learning (knowledge, capabilities, durable KV) stays. Crash recovery replays only the
   current timeline's inputs, verified by RAM hashes.
@@ -324,3 +345,8 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
 - **2026-11-27: Timeline-bound context is saved with each checkpoint.** `notes.md` and `state.json` are copied next to
   the `.state` file and restored on resume, so a restored timeline never briefs the agent with progress it lost. Run
   directories are resolved to absolute paths because the Claude child runs with the run directory as its cwd.
+- **2026-11-27: One SQLite memory store per data directory, with the rules in triggers.** Runs share it so knowledge
+  found in one run is there for the next. Immutability (objective, checks, events, knowledge text) is enforced by the
+  database for every writer, so a bug in pokeagent cannot quietly rewrite a run's objective or history either.
+- **2026-11-27: Knowledge is confirmed only by evidence from the run's own game,** an action event of its current
+  timeline. Web pages and the agent's own reasoning produce hypotheses; the brief and searches show the status.

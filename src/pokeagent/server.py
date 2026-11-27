@@ -3,6 +3,7 @@
 Every HTTP request must carry the bearer token of an open session (checked before MCP sees the request) and this
 server's own Host header (DNS-rebinding protection). Tools look the session up by its token, so a token only ever
 reaches its own session, budget and mode. Game calls run one at a time under the game's lock, off the event loop.
+Every action is recorded as an event; its id is the evidence the agent cites when it confirms knowledge.
 """
 
 import hmac
@@ -21,7 +22,9 @@ from mcp.server.mcpserver import Context, Image, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 
+from pokeagent import objectives
 from pokeagent.emulator.client import EmulatorError
+from pokeagent.memory import Memory, describe_knowledge
 
 NOTES_LIMIT = 8 * 1024
 
@@ -35,15 +38,16 @@ class Session:
     actions: int = 0
     summary: str | None = None
     next_focus: str | None = None
+    claim: str | None = None
     ended: bool = False
 
 
 class GameServer:
     """Owns the sessions and the tools. `game` provides `full_state()` and `act(name, **args)`, both returning
-    (text, png bytes or None)."""
+    (text, png bytes or None), and `observations()`."""
 
-    def __init__(self, game, notes: Path, harness_issues: Path, run_name: str):
-        self.game, self.notes, self.harness_issues, self.run_name = game, notes, harness_issues, run_name
+    def __init__(self, game, memory: Memory, notes: Path, harness_issues: Path):
+        self.game, self.memory, self.notes, self.harness_issues = game, memory, notes, harness_issues
         self.sessions: dict[str, Session] = {}
         self.mcp = MCPServer("game")
         self.after_action = None  # called after every action (the runner's periodic checkpoint)
@@ -118,6 +122,8 @@ class GameServer:
                 raise ToolError(f"the action budget ({session.budget}) is used up: update your notes, then end_session")
             session.actions += 1
             text, png = await on_game(partial(self.game.act, name, **args))
+            outcome = {"name": name, "args": args, "outcome": text.split("\n", 1)[0]}
+            text = f"[event {self.memory.event('action', outcome, session.number)}] {text}"
             if self.after_action:
                 await on_game(self.after_action)
             return [text, Image(data=png, format="png")] if png else text
@@ -184,11 +190,76 @@ class GameServer:
             game. The user reads these reports."""
             session = self._session(ctx)
             stamp = time.strftime("%Y-%m-%d %H:%M:%S")
-            heading = f"## {stamp}, run {self.run_name}, session {session.number}"
+            heading = f"## {stamp}, run {self.memory.run}, session {session.number}"
             entry = f"\n{heading}\n\n{description}\n\nEvidence: {evidence}\n"
             with self.harness_issues.open("a") as f:
                 f.write(entry[:8000])
             return "recorded"
+
+        def remember(fn, *args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except ValueError as e:
+                raise ToolError(str(e)) from e
+
+        @tool
+        def knowledge_search(query: str, ctx: Context, limit: int = 5) -> str:
+            """Search what was learned in this run, earlier runs on this ROM and this game family, and in general.
+            Matches any of the query's words; refuted and superseded entries are left out."""
+            self._session(ctx)
+            found = remember(self.memory.search, query, max(1, min(limit, 20)))
+            return "\n".join(describe_knowledge(entry) for entry in found) or "nothing found"
+
+        @tool
+        def knowledge_add(
+            kind: str, topic: str, content: str, ctx: Context, scope: str = "rom", url: str = "", evidence: int = 0
+        ) -> str:
+            """Record something learned, for later sessions and later runs. kind: mechanic, technical, map, strategy,
+            lesson, limitation or progress (what this run's game has done; scope run). scope: run, rom, family or
+            general. It is a hypothesis unless `evidence` names an action event (the [event N] of an action result in
+            this game) that showed it; anything from the web (give its url) stays a hypothesis until confirmed."""
+            session = self._session(ctx)
+            entry = remember(self.memory.add_knowledge, kind, topic, content, scope, url, evidence, session.number)
+            return f"recorded as #{entry}"
+
+        @tool
+        def knowledge_set_status(
+            entry: int, status: str, ctx: Context, evidence: int = 0, superseded_by: int = 0
+        ) -> str:
+            """Mark a knowledge entry hypothesis, confirmed (needs `evidence`: an action event id from this game),
+            refuted or stale, or name the entry that replaces it in `superseded_by`."""
+            self._session(ctx)
+            remember(self.memory.set_knowledge_status, entry, status, evidence, superseded_by)
+            return "updated"
+
+        @tool
+        async def propose_success_check(condition: dict, reason: str, ctx: Context) -> str:
+            """Propose a check that tells when the objective is met, for objectives without an authoritative one.
+            condition: {"obs": name, "op": "==", "!=", ">=", ">", "<=" or "<", "value": number}, or {"all": [...]},
+            {"any": [...]} or {"not": condition}, over the observations listed with their current values in your brief.
+            When it holds after a session, the run pauses until the user confirms; it never completes the run alone."""
+            session = self._session(ctx)
+            observations = await on_game(self.game.observations)
+            remember(objectives.validate, condition, [name for name in observations if name != "in_game"])
+            check = self.memory.add_check(condition, "agent", reason[:1000])
+            self.memory.event("check_proposed", {"check": check, "condition": condition}, session.number)
+            now = objectives.holds(condition, observations) and observations["in_game"]
+            return (
+                f"recorded as check #{check} ({objectives.describe(condition)}); it {'holds' if now else 'fails'} now"
+            )
+
+        @tool
+        def report_objective_complete(evidence: str, ctx: Context) -> str:
+            """Claim the objective is met when no success check can show it. The run pauses after this session until the
+            user confirms or rejects the claim."""
+            session = self._session(ctx)
+            if active := self.memory.checks("active"):
+                checks = "; ".join(objectives.describe(c["condition"]) for c in active)
+                return (
+                    f"Not recorded: pokeagent checks {checks} after every session and completes the run when it holds."
+                )
+            session.claim = evidence[:2000]
+            return "Recorded. The run pauses after this session for the user to confirm; end the session now."
 
 
 class _RequireSession:

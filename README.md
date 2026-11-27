@@ -52,12 +52,23 @@ user namespaces are disabled), pokeagent refuses to start rather than running un
 
 ```sh
 uv run pokeagent play --rom /path/to/your/red.gb --watch      # new run towards the default objective
-uv run pokeagent play --rom /path/to/your/red.gb --objective "Get the first badge" --max-sessions 10
+uv run pokeagent play --rom /path/to/your/red.gb --objective "Get the first badge" \
+  --success '{"obs": "badges", "op": ">=", "value": 1}'           # your own check completes the run
 uv run pokeagent resume 20261127-170000 --watch               # continue a run from its latest checkpoint
 ```
 
 Each run lives in `~/.local/share/pokeagent/runs/<id>/`: `play.log` shows every message and action, `notes.md` the
 agent's own notes. Ctrl-C stops a run after saving a checkpoint; closing the `--watch` window only stops watching.
+
+The default objective completes when the game reaches the Hall of Fame. A custom objective completes only with your
+`--success` check. Without one, the agent may propose a check or report the objective complete, and the run then
+pauses for you:
+
+```sh
+uv run pokeagent objective confirm 20261127-170000                     # the objective is met: complete the run
+uv run pokeagent objective reject 20261127-170000 --reason "not yet: ..."  # the agent reads why, then resume
+uv run pokeagent objective approve-check 20261127-170000               # make its proposed check authoritative
+```
 
 ## What stays local and what leaves your machine
 

@@ -23,6 +23,18 @@ HALL_OF_FAME = 0x76
 DEFAULT_OBJECTIVE = "Finish the game: defeat the Elite Four and the Champion and enter the Hall of Fame."
 DEFAULT_CHECK = {"obs": "map_id", "op": "==", "value": HALL_OF_FAME}
 MAP_NAMES = Path(__file__).with_name("gen1_map_names.txt").read_text().splitlines()
+OBSERVATIONS = {  # the values success checks may test, read from the adapter's state
+    "map_id": lambda s: s["map_id"],
+    "x": lambda s: s["x"],
+    "y": lambda s: s["y"],
+    "badges": lambda s: s["badges"],
+    "party_count": lambda s: len(s["party"]),
+    "max_level": lambda s: max((p["level"] for p in s["party"]), default=0),
+    "dex_owned": lambda s: s["dex_owned"],
+    "money": lambda s: s["money"],
+    "in_battle": lambda s: s["battle"] is not None,
+    "in_game": lambda s: s["in_game"],
+}
 
 # WRAM / HRAM (pret pokered symbols)
 TILEMAP = 0xC3A0  # 20x18 screen tile ids
@@ -367,18 +379,7 @@ class Gen1:
     @staticmethod
     def observations(state: dict) -> dict:
         """Trusted values for success checks and conditions."""
-        return {
-            "map_id": state["map_id"],
-            "x": state["x"],
-            "y": state["y"],
-            "badges": state["badges"],
-            "party_count": len(state["party"]),
-            "max_level": max((p["level"] for p in state["party"]), default=0),
-            "dex_owned": state["dex_owned"],
-            "money": state["money"],
-            "in_battle": state["battle"] is not None,
-            "in_game": state["in_game"],
-        }
+        return {name: read(state) for name, read in OBSERVATIONS.items()}
 
     @staticmethod
     def state_text(state: dict) -> str:
