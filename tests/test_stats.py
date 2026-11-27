@@ -12,13 +12,13 @@ def played(tmp_path, run, cost, waited=0.0):
     memory.open_run(META)
     usage = {"input_tokens": 1000, "output_tokens": 500, "cache_read_input_tokens": 9000}
     memory.event("session_start", {}, 1)
-    memory.event("action", {"outcome": "walk"}, 1)
     memory.event("milestone", {"kind": "map", "map_id": 1, "text": "first visit to Pallet Town"}, 1)
+    memory.event("action", {"outcome": "walk"}, 1)
     if waited:
         memory.event("limit_wait", {"seconds": waited})
-    memory.event("action", {"outcome": "walk"}, 1)
     memory.event("capability_call", {"id": 1, "name": "heal", "version": 1, "error": "stuck"}, 1)
     memory.event("milestone", {"kind": "badge", "badges": 1, "text": "badge 1"}, 1)
+    memory.event("action", {"outcome": "walk"}, 1)
     memory.event("session_end", {"end": "completed", "turns": 9, "actions": 2, "cost_usd": cost, "usage": usage}, 1)
     memory.event("session_start", {"mode": "develop"}, 2)
     memory.event("development_cycle", {"tool": "step", "staged": 1, "attempt": 1}, 2)

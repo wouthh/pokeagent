@@ -621,6 +621,7 @@ class Runner:
         while True:
             if verdict := objectives.judge(self.memory, self.game.observations()):
                 self.log(verdict, self.memory.status()[1])
+                self.show()
                 return verdict
             if pending is not None and (max_sessions is None or started < max_sessions):
                 started += self._develop(pending, progress)
@@ -678,6 +679,7 @@ class Runner:
             if session.claim:
                 objectives.claim(self.memory, f"the agent reported the objective complete: {session.claim}")
                 self.log("claimed", session.claim)
+                self.show()
                 return "claimed"
             if result.end == "auth_error":
                 raise ProviderError(f"the Claude CLI lost its login: {result.error}")
@@ -694,6 +696,7 @@ class Runner:
             climbed, self._climbed = self._climbed, 0
             if climbed >= 4 and (verdict := objectives.judge(self.memory, self.game.observations())):
                 self.log(verdict, self.memory.status()[1])  # success beats the stuck consequences
+                self.show()
                 return verdict
             if climbed == 4 and self._restore_progress():
                 progress = json.loads(progress_file.read_text())
