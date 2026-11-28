@@ -64,10 +64,10 @@ def _base_data(rom: bytes) -> int | None:
     """The 32-byte records of every species, whose first byte is the Pokédex number (1, 2, 3, ...)."""
     for m in re.finditer(rb"\x01", rom):
         at = m.start()
-        if rom[at + BASE_SIZE : at + BASE_SIZE + 1] == b"\x02" and rom[at + 2 * BASE_SIZE] == 3:
-            ends = at + SPECIES_COUNT * BASE_SIZE
-            if ends <= len(rom) and all(rom[at + i * BASE_SIZE] == i + 1 for i in range(SPECIES_COUNT)):
-                return at
+        if at + SPECIES_COUNT * BASE_SIZE <= len(rom) and all(
+            rom[at + i * BASE_SIZE] == i + 1 for i in range(SPECIES_COUNT)
+        ):
+            return at
     return None
 
 
