@@ -312,9 +312,9 @@ def decode(data: bytes) -> str:
 
 
 def valid_name(data: bytes) -> bool:
-    """A player or Pokémon name: 1-7 or more printable characters, then the 0xFF terminator."""
+    """A player or Pokémon name: printable characters (spaces after the first allowed), then the 0xFF terminator."""
     end = data.find(0xFF)
-    return end >= 1 and all(b in tables.CHARMAP and b != 0 for b in data[:end])
+    return end >= 1 and data[0] != 0 and all(b in tables.CHARMAP for b in data[:end])
 
 
 def decode_money(raw: int, key: int) -> int:

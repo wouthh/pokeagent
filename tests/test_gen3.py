@@ -72,6 +72,7 @@ def test_charmap_text_round_trips_and_stops_at_the_terminator():
 
 def test_names_are_valid_only_when_terminated():
     assert valid_name(tables.encode("AAAAAAA")[:8]) and valid_name(tables.encode("ASH") + bytes(4))
+    assert valid_name(tables.encode("ASH K") + b"\xff") and not valid_name(b"\x00\xbb\xff")
     assert (
         not valid_name(bytes(8)) and not valid_name(b"\xff" * 8) and not valid_name(b"\xbb\xbb\xbb\x00\x00\x00\x00\x00")
     )

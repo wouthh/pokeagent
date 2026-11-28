@@ -67,8 +67,8 @@ def check_observation(spec: dict, taken: set[str]) -> dict:
     _fields(spec, {"name", "description", "address", "length", "decode", "bit", "show"})
     name = _name(spec, taken)
     address, length, kind = spec.get("address"), spec.get("length", 1), spec.get("decode")
-    if not isinstance(address, int) or not 0 <= address <= 0xFFFF:
-        raise CapabilityError("address must be a number 0..0xFFFF")
+    if not isinstance(address, int) or not 0 <= address <= 0xFFFFFFFF:
+        raise CapabilityError("address must be a number 0..0xFFFFFFFF")  # the game's RAM ranges are enforced on read
     if not isinstance(length, int) or not 1 <= length <= MAX_READ:
         raise CapabilityError(f"length must be 1..{MAX_READ}")
     if kind not in DECODES:
