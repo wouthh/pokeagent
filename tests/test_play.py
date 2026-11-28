@@ -633,13 +633,33 @@ def test_a_failed_recovery_write_is_an_emulator_failure_so_the_server_restarts(t
     runner, _, _ = make_runner(tmp_path, [])
     runner.server.after_action()
 
-    def full_disk(path, data):
+    def full_disk(self, data):
         raise OSError("no space left on device")
 
-    monkeypatch.setattr("pokeagent.play.write_atomic", full_disk)
+    monkeypatch.setattr(Path, "write_bytes", full_disk)
     with pytest.raises(EmulatorError, match="no space left"):
         runner.server.after_action()
     assert runner.recover("write failed") and runner.game.restarts == [b"state 1"]
+
+
+def test_a_failed_second_recovery_write_leaves_both_files_as_they_were(tmp_path, monkeypatch):
+    runner, _, _ = make_runner(tmp_path, [])
+    tkv, recovery = runner.run_dir / "tkv.json", runner.run_dir / "recovery.tkv.json"
+    tkv.write_text("old")
+    runner.server.after_action()
+    before = (runner.run_dir / "recovery.state").read_bytes()
+    tkv.write_text("new")
+    real = Path.write_bytes
+
+    def full_disk(self, data):
+        if self.name == "recovery.tkv.json.tmp":
+            raise OSError("no space left on device")
+        return real(self, data)
+
+    monkeypatch.setattr(Path, "write_bytes", full_disk)
+    with pytest.raises(EmulatorError, match="no space left"):
+        runner.server.after_action()
+    assert (runner.run_dir / "recovery.state").read_bytes() == before and recovery.read_text() == "old"
 
 
 def test_overlapping_actions_never_leave_an_older_recovery_state(tmp_path):
