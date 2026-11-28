@@ -10,11 +10,10 @@ import ipaddress
 import json
 import signal
 import threading
-import tkinter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
-from PIL import Image, ImageTk
+from PIL import Image
 
 # Keyboard keys (Tk keysyms, lower case) to Game Boy buttons, as in common emulators.
 KEYS = {
@@ -54,6 +53,10 @@ class Viewer:
 
     def _run(self, scale: int, ready: threading.Event) -> None:
         signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+        import tkinter  # here, so a Python without Tk still runs headless and serves the web page
+
+        from PIL import ImageTk
+
         try:
             root = tkinter.Tk()
         except tkinter.TclError as e:

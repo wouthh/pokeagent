@@ -14,6 +14,7 @@ import io
 import json
 import os
 import shutil
+import signal
 import threading
 import time
 from functools import partial
@@ -933,11 +934,13 @@ def _states(run_dir: Path, memory: Memory, checkpoint: str | None) -> list[tuple
 def _viewer(watch: bool, web: tuple[str, int] | None):
     """(what the game and runner show things on, the web server or None): the Tk window when `watch`, the web page at
     `web` (host, port); both show the same object. (None, None) for neither."""
+    if not (watch or web):
+        return None, None
     from types import SimpleNamespace
 
     from pokeagent import viewer
 
-    shown = viewer.Viewer() if watch else SimpleNamespace(frame=None, status="", panel="") if web else None
+    shown = viewer.Viewer() if watch else SimpleNamespace(frame=None, status="", panel="")
     return shown, viewer.serve(shown, web) if web else None
 
 
@@ -998,12 +1001,17 @@ def play_by_hand(
             if state:
                 emu.load_state(state)
             before, tick, due = emu.save_ram(), 2 / emu.info["fps"], time.monotonic()
-            with contextlib.suppress(KeyboardInterrupt):
-                while not viewer.closed.is_set():
+            # Ctrl-C only sets a flag, so it never lands between an emulator request and its reply.
+            stop = threading.Event()
+            previous = signal.signal(signal.SIGINT, lambda *_: stop.set())
+            try:
+                while not (viewer.closed.is_set() or stop.is_set()):
                     emu.run(sorted(viewer.buttons), 2)  # two frames per step: the window redraws at 30 fps
                     viewer.frame = emu.frame()
                     due = max(due + tick, time.monotonic() - tick)  # after a stall, carry on rather than rush
                     time.sleep(max(0.0, due - time.monotonic()))
+            finally:
+                signal.signal(signal.SIGINT, previous)
             sram = emu.save_ram()
     finally:
         if page:
