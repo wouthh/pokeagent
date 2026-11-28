@@ -715,8 +715,9 @@ class Gen3:
             elif L.PRINTERS:
                 pointer = struct.unpack_from("<I", emu.read(L.PRINTERS, 4))[0]
             else:
-                # Ruby and Sapphire menus (boy or girl, the name) ask their question in the menu window
-                window = emu.read(L.MENU_WINDOW if kind == "menu" else L.FIELD_WINDOW, 0x30)
+                # Ruby and Sapphire menus (boy or girl, the name) ask their question in the menu window; a field
+                # message's yes/no prompt keeps its question in the field window
+                window = emu.read(L.MENU_WINDOW if kind == "menu" and not yes_no else L.FIELD_WINDOW, 0x30)
                 pointer = struct.unpack_from("<I", window, 0x20)[0] + struct.unpack_from("<H", window, 0x1E)[0]
             text = self._message(emu, pointer, in_battle) if pointer else ""
             if text:

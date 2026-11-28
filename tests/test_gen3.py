@@ -501,3 +501,29 @@ def test_ruby_text_is_read_at_the_windows_index_not_at_its_start():
     layout = LAYOUTS["rs"]
     emu = StubEmu(**{f"x{layout.FIELD_WINDOW:x}": bytes(window), f"x{layout.MENU_WINDOW:x}": bytes(0x30)})
     assert rs._printers(emu) == [(0, 0x08000100 + 26, 0)]
+
+
+def test_ruby_yes_no_prompt_reports_the_field_question_not_the_menu_window():
+    rs = stub_adapter("rs")
+    rs.functions = dict(overworld=1, battle=2, wait=3, action=(4,), move=(5,), yes_no=(0x80B5505,), menu=(6,))
+    question = tables.encode("Save?") + b"\xff"
+    rs.rom = bytearray(0x200)
+    rs.rom[0x100 : 0x100 + len(question)] = question
+    rs.rom[0x180:0x186] = tables.encode("Other") + b"\xff"
+    layout = LAYOUTS["rs"]
+    field = bytearray(0x30)  # finished (state 0), still holding its text
+    struct.pack_into("<I", field, 0x20, 0x08000100)
+    menu = bytearray(0x30)
+    struct.pack_into("<I", menu, 0x20, 0x08000180)
+    task = bytearray(0x28)
+    struct.pack_into("<I", task, 0, 0x80B5505)
+    task[4] = 1
+    emu = StubEmu(
+        **{
+            f"x{layout.FIELD_WINDOW:x}": bytes(field),
+            f"x{layout.MENU_WINDOW:x}": bytes(menu),
+            f"x{layout.TASKS:x}": bytes(task),
+        }
+    )
+    screen = rs._screen(emu, False, True)
+    assert screen["yes_no"] and screen["text"] == ["Save?"]
