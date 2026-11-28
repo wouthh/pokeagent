@@ -89,6 +89,13 @@ def test_screen_mode():
     assert Gen1.screen_mode(bytes(prompt), True)["mode"] == "battle"
 
 
+def test_screen_text_reads_text_macro_ids_as_map_tiles():
+    # Yellow's Oak's Lab row 4: map tiles 5D 5E 29 ... decoded as "TRAINER" before
+    row = bytes((0x5D, 0x5E, 0x29, 0x3B, 0x4A, 0x54)) + text(" " * 14)
+    assert Gen1.screen_text(row + text(" ") * 340)[0] == ""
+    assert Gen1.screen_text(text("POTION") + text(" " * 14) + text(" ") * 340)[0] == "POTION"
+
+
 # ---- on the user's ROM ----
 
 

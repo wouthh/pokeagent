@@ -134,6 +134,8 @@ CHARMAP |= {0xE1: "PK", 0xE2: "MN", 0xE3: "-", 0xE4: "'r", 0xE5: "'m", 0xE6: "?"
 CHARMAP |= {0xED: "▶", 0xEE: "▼", 0xEF: "♂", 0xF0: "¥", 0xF1: "×", 0xF2: ".", 0xF3: "/", 0xF4: ",", 0xF5: "♀"}  # noqa: RUF001 (the game's own symbol)
 CHARMAP |= {0x79: "┌", 0x7A: "─", 0x7B: "┐", 0x7C: "│", 0x7D: "└", 0x7E: "┘", 0x9A: "(", 0x9B: ")", 0x9C: ":"}
 CHARMAP |= {0x9D: ";", 0x9E: "[", 0x9F: "]", 0x6D: ":", 0x75: "…", 0x4A: "PKMN", 0x54: "POKé", 0x5D: "TRAINER"}
+# Text macros (PKMN, POKé, TRAINER) are expanded as text prints, so on screen these ids are map tiles, not text.
+SCREEN_MACROS = bytes.maketrans(bytes((0x4A, 0x54, 0x5D)), b"\x7f\x7f\x7f")
 CHARMAP |= {0x80 + i: chr(ord("A") + i) for i in range(26)} | {0xA0 + i: chr(ord("a") + i) for i in range(26)}
 CHARMAP |= {0xF6 + i: str(i) for i in range(10)}
 CURSOR, WAIT_ARROW, BOX_TOP_LEFT, BOX_BOTTOM_RIGHT = 0xED, 0xEE, 0x79, 0x7E
@@ -387,7 +389,8 @@ class Gen1:
 
     @classmethod
     def screen_text(cls, tiles: bytes) -> list[str]:
-        return [cls.decode(tiles[r * 20 : (r + 1) * 20]).replace("·", " ").rstrip() for r in range(18)]
+        rows = (tiles[r * 20 : (r + 1) * 20].translate(SCREEN_MACROS) for r in range(18))
+        return [cls.decode(row).replace("·", " ").rstrip() for row in rows]
 
     @classmethod
     def screen_mode(cls, tiles: bytes, in_battle: bool) -> dict:
