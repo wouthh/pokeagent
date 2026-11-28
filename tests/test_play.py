@@ -1,4 +1,6 @@
 import json
+import signal
+import sys
 import threading
 import time
 from pathlib import Path
@@ -878,3 +880,35 @@ def test_play_by_hand_keeps_an_in_game_save_and_leaves_the_run_alone(game, rom_p
     out.write_bytes(b"")
     with pytest.raises(ValueError, match="exists; pass --force"):
         play_module.play_by_hand(run_dir, tmp_path, out=out)
+
+
+def test_play_by_hand_finishes_on_ctrl_c_and_still_reads_the_save(game, rom_path, tmp_path, monkeypatch):
+    _, _, bedroom = game
+    run_dir = new_run(rom_path, None, tmp_path)
+    (run_dir / "recovery.state").write_bytes(bedroom)
+    monkeypatch.setattr(play_module.time, "sleep", lambda seconds: None)
+    hands = Hands([("down", 50)])
+    pressed = [False]
+    steps = hands.steps
+
+    class CtrlC(Hands):
+        @property
+        def buttons(self):
+            if not pressed[0]:
+                pressed[0] = True
+                signal.raise_signal(signal.SIGINT)
+            return steps.pop(0) if steps else frozenset()
+
+    hands.__class__ = CtrlC
+    monkeypatch.setattr(play_module, "_viewer", lambda watch, web: (hands, None))
+    out = tmp_path / "mine.sav"
+    assert play_module.play_by_hand(run_dir, tmp_path, out=out) == "you did not save in game; nothing written"
+    assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+
+
+def test_headless_runs_need_no_tk(monkeypatch):
+    monkeypatch.setitem(sys.modules, "tkinter", None)  # as on a Python built without Tk
+    assert play_module._viewer(False, None) == (None, None)
+    shown, page = play_module._viewer(False, ("127.0.0.1", 0))
+    page.shutdown()
+    assert shown.frame is None
