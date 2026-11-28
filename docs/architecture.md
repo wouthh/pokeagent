@@ -157,6 +157,54 @@ pokefirered symbol files, by family (`rs`, `e`, `frlg`); names come from the use
   no glitches are named.
 - Tests: `tests/test_gen3.py` builds and encrypts Pokémon, saves and grids from bytes (no ROM), and boots each of the
   five dumps found in `roms/`.
+## Game adapter: Pokémon Gen 2 *(Gold, Silver, Crystal and engine hacks)*
+
+`games/pokemon_gen2.py` subclasses `Gen1` and reuses its helpers, `Grid` (as `Gen2Grid`) and its macros (`press`,
+`walk`, `walk_to`, `choose`, `advance_text`, `save_game`); what differs is parameterised in `pokemon_gen1.py`
+(charmap, tile-map row of the ▼, step and reaction frames) or overridden. Pokémon, item and move names, the type names,
+the base data (types) and the collision permission table are read from the user's ROM; `gen2_gold_silver_map_names.txt`
+and `gen2_crystal_map_names.txt` hold only pret's map constant names.
+
+- **Recognition.** `gen2_tables.find_tables` scans for every table (the run of 251 ten-byte names, the strings after
+  POUND and MASTER BALL, the pointers to NORMAL, FIGHTING and FLYING, the 32-byte base data records numbered 1, 2, 3,
+  the permission table's first 32 bytes, the landmark table's first two entries). There is no sha1 gate: `ROMS` only
+  names Gold, Silver and Crystal 1.1; any other dump is "Gen 2 ROM (header title X)". The header (title `PM_CRYSTAL` or
+  the colour-only flag) picks Crystal's WRAM layout, else Gold/Silver's; the first `state` of a running game checks
+  the guess against the game's invariants and says the layout is unverified if none fits (as Gen 1). Crystal 1.0, the
+  Australian Crystal and Crystal Clear take this path and are unverified: Crystal Clear's tables were found by the scan
+  and its tile map address held, but its custom intro was not passed, so no gameplay was checked.
+- **Core.** `{"sameboy_model": "Game Boy Color", "sameboy_rtc": "accurate"}` for all three (Crystal is colour-only; the
+  accurate clock keeps checkpoints and fixtures deterministic). A game started from a `--sav` has no `.rtc` file: the
+  clock starts at a fixed Sunday morning on emulated time and Continue shows no clock prompt (checked for Gold and
+  Crystal).
+- **Memory.** The game state is in WRAM bank 1; the worker's `read` shows whichever bank SVBK selects at D000-DFFF, so
+  `state` reads the bank-1 values only while FF70 & 7 is 0 or 1 (title screens map banks 5 and 6). Banks 2-7 are
+  readable at 0x10000 (nothing here needs them). Money is binary big-endian, not BCD; the party struct is 0x30 bytes
+  with a held item and five stats and no types (the species' base data has them).
+- **State** has the Gen 1 shape plus `item` and `stat_names` on party members, `time_of_day`, Johto and Kanto badges
+  (`badges` is their total out of 16, `badge_bits` is `johto | kanto << 8`) and `map_id = group << 8 | number`. The bag
+  flattens the items, key items, balls and TM/HM pockets. Known dumps get map names from the constants files; hacks get
+  the ROM's landmark name plus `(map group:number)`.
+- **Screens.** The dialog box is rows 12-17 and its ▼ sits on the bottom border (row 17, unlike Gen 1's 16). Tile ids
+  decode as letters for map tiles and Pokémon pictures too, so `screen_text` only reads inside boxes (┌ ... ┘) and
+  skips picture boxes. Menus drop presses shorter than about four frames, so `press` holds four.
+- **Walk grid.** Collision is per 16x16 step square: four bytes per block (top-left, top-right, bottom-left, bottom-right
+  of the block's step squares) looked up in the permission table (0 walkable, 1 water, 0xF wall, bit 0x10 talk). Water
+  counts as walkable only while surfing or when the Fog Badge and a party member with Surf allow it. Ledges (0xA0-0xA7)
+  are floor you stand on; a further step in the hop direction jumps two squares over the wall that follows. Side walls
+  (0xB0-0xB7) block entering them in some directions. NPCs come from the object structs (coordinates are offset by 4)
+  and warps from the ROM's event list. Warp carpets and doors trigger on a step in their direction: `walk_to` ends on the
+  square, then a `walk` in that direction leaves the map. The edge connections to neighbouring maps are not in the grid.
+- **Verified live** (Gold and Crystal): new game to the starter, the first wild battle, `state_text`, `walk_to` across
+  Route 29 and 30 ledges (a left, a down and a down-left hop on Route 29, a down hop on Route 30, each one-way), `advance_text`
+  stopping at yes/no prompts, in-game save and `save_complete`, a `.sav` imported into a fresh cartridge. Silver shares
+  Gold's layout (booted and compared). Not verified live: side walls (none on those routes), diagonal-up hops, surfing,
+  trainer battles, key item, ball and TM/HM pockets with content, badges.
+- **Save:** bank 1, check value 99 at 0xA008, the data from 0xA009, its 16-bit little-endian sum, check value 127.
+  Gold/Silver: data ends at 0xAD68, checksum 0xAD69, check value 0xAD6B. Crystal: data ends at 0xAB82, checksum 0xAD0D,
+  check value 0xAD0F.
+- **Default objective:** the Hall of Fame map (group 16, map 8, id 0x1008) after the Elite Four, as in Gen 1. Defeating
+  Red at Mt. Silver is a custom objective.
 
 ## Play loop *(implemented, phase 4)*
 
@@ -781,3 +829,16 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
   other addresses); Radical Red keeps FireRed's RAM but stores Pokémon unencrypted in a fixed block order with other
   table layouts and capitalisation. Both have Title Case names, so the scanner does not recognise them; a hack that
   keeps the capitals but moves RAM stops at the layout probe.
+- **2026-11-29: Gen 2 uses the emulated clock.** Wout wants checkpoints, validation states and fixtures deterministic,
+  so the SameBoy core runs with `sameboy_rtc: accurate`: the in-game clock follows emulated time, not the host's. A
+  `--sav` has no `.rtc` file; the game continues from a fixed default time without a prompt.
+- **2026-11-29: Gen 2 map names are constants files, hacks get landmarks.** pret's map identifiers (no game text) in one
+  file per version family, indexed by group and number; Gold and Silver share one. A ROM that is not a known dump has no
+  constants: its map is named by the ROM's landmark table (the area, e.g. a town) plus the raw group and number.
+- **2026-11-29: Gen 2 recognition follows Gen 1's.** No sha1 gate: scanned tables, a header guess of the base game and a
+  layout probe. Crystal 1.0, the Australian Crystal and Crystal Clear get this path and are marked unverified. The
+  Spaceworld 1997 demo is another engine (DMG, WRAM bank 0, its own charmap) and would need its own adapter.
+- **2026-11-29: The Gen 2 grid treats a ledge as a tile you stand on.** Live checks showed the player steps onto the hop
+  tile like any floor and the next press in the hop direction jumps two squares; entering from the far side is blocked
+  by the wall behind it, which is what makes ledges one-way. An earlier reading of the source (jump when stepping onto
+  the tile, landing past it) was wrong and was replaced.
