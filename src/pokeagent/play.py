@@ -884,6 +884,74 @@ def restore_notice(data: dict) -> str:
     return "\n".join(lines)
 
 
+def _run_rom(run_dir: Path) -> tuple[dict, Path, Gen1]:
+    """The run's metadata, ROM path and adapter, once the ROM is checked to be the one the run started with."""
+    meta = json.loads((run_dir / "run.json").read_text())
+    rom = Path(meta["rom"])
+    data = rom.read_bytes()
+    if hashlib.sha1(data).hexdigest() != meta["rom_sha1"]:
+        raise ValueError(f"{rom} is no longer the ROM this run started with")
+    return meta, rom, Gen1(data)
+
+
+def _states(run_dir: Path, memory: Memory, checkpoint: str | None) -> list[tuple[str, bytes]]:
+    """(label, state) to show or save, newest first: one checkpoint, or the latest state and then the checkpoints of
+    the current timeline's history."""
+    if checkpoint:
+        if not any(e["data"]["file"] == checkpoint for e in restorable(run_dir, memory)):
+            raise ValueError(f"{checkpoint} is not a checkpoint of this run's current timeline; see pokeagent restore")
+        return [(f"checkpoint {checkpoint}", (run_dir / "checkpoints" / checkpoint).read_bytes())]
+    found = [("the latest state", state)] if (state := latest_state(run_dir)) else []
+    for event in reversed(restorable(run_dir, memory)):
+        saved = time.strftime("%Y-%m-%d %H:%M", time.localtime(event["created"]))
+        label = f"checkpoint {event['data']['file']} ({event['data']['reason']}, {saved})"
+        found.append((label, (run_dir / "checkpoints" / event["data"]["file"]).read_bytes()))
+    return found
+
+
+def view(run_dir: Path, data_dir: Path, checkpoint: str | None = None) -> None:
+    """Show a run's game in a window, at its latest state or a checkpoint, with the status panel. Nothing is played or
+    changed; returns when the window is closed."""
+    from pokeagent.viewer import Viewer
+
+    meta, rom, _ = _run_rom(run_dir)
+    with contextlib.closing(open_memory(run_dir, data_dir)) as memory:
+        found = _states(run_dir, memory, checkpoint)[:1]
+        panel = stats.status(memory, run_dir)
+    with Emulator(core_path(meta["core"]), rom, options=meta["core_options"]) as emu:
+        if found:
+            emu.load_state(found[0][1])
+        emu.run([], 1)  # draw the loaded state
+        frame = emu.frame()
+    viewer = Viewer()
+    viewer.frame, viewer.panel = frame, panel
+    viewer.status = f"{run_dir.name}: {found[0][0] if found else 'power-on'} (viewing only; close the window to quit)"
+    while not viewer.closed.wait(0.2):  # a short wait keeps Ctrl-C working
+        pass
+
+
+def export_save(run_dir: Path, data_dir: Path, out: Path, checkpoint: str | None = None, force: bool = False) -> str:
+    """Write the run's game as an in-game save to `out`: the cartridge's battery RAM, the standard .sav other
+    emulators load. The game is saved through its START menu on a copy of the state, so the run does not change. The
+    newest state that can be saved is used (not one in a battle or at a yes/no prompt); returns which one."""
+    if out.exists() and not force:
+        raise ValueError(f"{out} exists; pass --force to replace it or choose another --out")
+    meta, rom, adapter = _run_rom(run_dir)
+    with contextlib.closing(open_memory(run_dir, data_dir)) as memory:
+        found = _states(run_dir, memory, checkpoint)
+    with Emulator(core_path(meta["core"]), rom, options=meta["core_options"]) as emu:
+        for label, state in found:
+            emu.load_state(state)
+            if adapter.save_game(emu) and adapter.save_complete(sram := emu.save_ram()):
+                write_atomic(out, sram)
+                return label
+    raise ValueError(
+        "no state of this run could be saved in game (each was in a battle or at a yes/no prompt)"
+        if found
+        else "this run has no game state yet"
+    )
+
+
 def play(
     run_dir: Path,
     data_dir: Path,
@@ -898,12 +966,7 @@ def play(
     """Play a run from where it stopped (or power-on) until something stops it; return why. `development` holds the
     Runner's dev_* policy settings."""
     run_dir = run_dir.resolve()
-    meta = json.loads((run_dir / "run.json").read_text())
-    rom = Path(meta["rom"])
-    data = rom.read_bytes()
-    if hashlib.sha1(data).hexdigest() != meta["rom_sha1"]:
-        raise ValueError(f"{rom} is no longer the ROM this run started with")
-    adapter = Gen1(data)
+    meta, rom, adapter = _run_rom(run_dir)
     with run_lock(run_dir), contextlib.closing(open_memory(run_dir, data_dir)) as memory:
         status, why = memory.status()
         if status != "running":

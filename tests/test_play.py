@@ -689,6 +689,28 @@ def test_a_restart_waits_for_an_overlapping_actions_recovery_write(tmp_path):
     assert game.restarts == [b"state 1"]
 
 
+def test_export_save_saves_a_copy_in_game_and_never_overwrites(game, rom_path, tmp_path):
+    gen1, emu, bedroom = game
+    run_dir = new_run(rom_path, None, tmp_path)
+    emu.load_state(bedroom)
+    gen1.press(emu, "start", wait=30)
+    assert gen1.choose(emu, "SAVE")
+    (run_dir / "recovery.state").write_bytes(emu.save_state())  # at the "save the game?" prompt: never answered
+    out = tmp_path / "red.sav"
+    with pytest.raises(ValueError, match="could be saved in game"):
+        play_module.export_save(run_dir, tmp_path, out)
+    assert not out.exists()
+    (run_dir / "recovery.state").write_bytes(bedroom)
+    assert play_module.export_save(run_dir, tmp_path, out) == "the latest state"
+    assert gen1.save_complete(out.read_bytes())
+    assert (run_dir / "recovery.state").read_bytes() == bedroom  # the run itself is not saved
+    with pytest.raises(ValueError, match="exists; pass --force"):
+        play_module.export_save(run_dir, tmp_path, out)
+    out.write_bytes(b"")
+    play_module.export_save(run_dir, tmp_path, out, force=True)
+    assert gen1.save_complete(out.read_bytes())
+
+
 def test_restore_branches_a_timeline_and_the_brief_says_what_changed(tmp_path):
     runner, briefs, _ = make_runner(tmp_path, [(SessionResult("completed"), None)])
     memory, run_dir = runner.memory, runner.run_dir

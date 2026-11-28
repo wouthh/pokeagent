@@ -133,6 +133,9 @@ def serve(core: str, rom: str, options: dict[str, str]) -> None:
                         reply(read(int(req["addr"]), int(req["n_bytes"])), ok=True)
                     case "ram_hash":
                         reply(ok=True, sha256=ram_hash())
+                    case "save_ram":  # the cartridge's battery RAM, every bank: what a .sav file holds
+                        view = session.core.get_memory(0)  # RETRO_MEMORY_SAVE_RAM
+                        reply(bytes(view) if view is not None else b"", ok=True)
                     case "save_state":
                         state = bytearray(session.core.serialize_size())
                         if not session.core.serialize(state):

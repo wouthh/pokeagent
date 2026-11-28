@@ -67,6 +67,9 @@ CURSOR, WAIT_ARROW, BOX_TOP_LEFT, BOX_BOTTOM_RIGHT = 0xED, 0xEE, 0x79, 0x7E
 STATUS = {0x08: "poisoned", 0x10: "burned", 0x20: "frozen", 0x40: "paralyzed"}
 
 REACT_FRAMES = 32
+# The in-game save in cartridge RAM bank 1 (pret pokered sPlayerName .. sMainDataCheckSum): the game sums these bytes,
+# complements the sum and stores it after them; a save whose checksum fails loads as "The file data is destroyed!"
+SAVE_SIZE, SAVE_MAIN, SAVE_CHECKSUM = 0x8000, slice(0x2598, 0x3523), 0x3523
 DIRECTIONS = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
 FACING_CODES = {0x0: "down", 0x4: "up", 0x8: "left", 0xC: "right"}
 
@@ -524,6 +527,42 @@ class Gen1:
                 return True
             self.press(emu, "down" if rows[0] > at // 20 else "up", wait=8)
         return False
+
+    def save_game(self, emu: Emulator) -> bool:
+        """Save in game as a player does: close text and back out of menus with B, then START, SAVE, YES, and YES again
+        when an older save is replaced. False in a battle or at a yes/no prompt (never answered here), or when the
+        menus did not follow."""
+        for _ in range(12):
+            state = self.state(emu)
+            if not state["in_game"] or state["battle"] or state["screen"]["yes_no"]:
+                return False
+            if state["screen"]["mode"] == "overworld":
+                break
+            if state["screen"]["mode"] == "dialog":
+                self.advance_text(emu)
+            else:
+                self.press(emu, "b", wait=30)
+        else:
+            return False
+        self.press(emu, "start", wait=30)
+        if not self.choose(emu, "SAVE"):
+            return False
+        outcome = self.advance_text(emu)["outcome"]
+        for _ in range(2):  # "Would you like to SAVE the game?", then "The older file will be erased to save."
+            if outcome != "menu" or not self.choose(emu, "YES"):
+                return False
+            outcome = self.advance_text(emu)["outcome"]
+            if outcome == "closed":
+                return True
+        return False
+
+    @staticmethod
+    def save_complete(sram: bytes) -> bool:
+        """Whether cartridge RAM holds a whole in-game save: the right size, a player name and the game's checksum."""
+        name = decode(sram[SAVE_MAIN.start : SAVE_MAIN.start + 11])
+        if len(sram) != SAVE_SIZE or not name or "·" in name:
+            return False
+        return ~sum(sram[SAVE_MAIN]) & 0xFF == sram[SAVE_CHECKSUM]
 
     def advance_text(self, emu: Emulator, max_presses: int = 40, quiet_frames: int = 60) -> dict:
         """Press A through dialog until it closes. Stops, without pressing, at any menu or yes/no prompt.
