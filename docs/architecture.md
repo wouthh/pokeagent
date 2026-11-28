@@ -300,7 +300,7 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
     holds at most 64 KB of JSON.
   - *Contract, enforced by the orchestrator:* arguments against `params` and the `preconditions` before the call
     (a refusal does not count against the tool); during it one budget shared by every nested call (18,000 frames,
-    600 inputs, 60 s), at most 4 nested calls, and the `invariants` after every request that ran the game; after it
+    600 controller inputs counted as the game executes them, 60 s), at most 4 nested calls, and the `invariants` after every request that ran the game; after it
     the result against `returns`, the `postconditions`, and every changed fingerprint group must be a declared
     effect. Undeclared party, bag or money changes therefore fail the call. A refused ctx request (a bad argument, a
     failed nested call) is an error the tool may catch; a budget, depth, invariant or protocol violation ends the

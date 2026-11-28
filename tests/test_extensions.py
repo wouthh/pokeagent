@@ -31,6 +31,7 @@ class FakeGame:
         memory.open_run({"objective": "x", "rom_sha1": "red", "family": "pokemon-gen1"})
         self.registry, self.library, self.tkv = Registry(memory), tmp_path / "library", tmp_path / "tkv.json"
         self.adapter, self.emu, self.x, self.money, self.frames = FakeAdapter(), self, 0, 100, 0
+        self.presses = 0
 
     def read(self, address, length):
         if address < 0x8000:
@@ -41,6 +42,9 @@ class FakeGame:
         return {"x": self.x, "money": self.money}
 
     def _do(self, name, args):
+        if name == "walk_to":
+            self.presses += args["presses"]
+            return "walked"
         if name == "walk":
             self.x += args.get("steps", 1)
             return "walked"
@@ -128,6 +132,7 @@ def test_calls_are_refused_before_they_run(world):
         ),
         ("for _ in range(700): ctx.press('a')", {}, "inputs is used up"),
         ("ctx.call('press', button='a', times=700)", {}, "inputs is used up"),
+        ("ctx.call('walk_to', presses=700)", {}, "inputs is used up"),
         ("for _ in range(31): ctx.wait(600)", {}, "frames or time is used up"),
         ("while True: pass", {}, "ran out of time"),
         ("x = bytearray(2 << 30)", {}, "failed: MemoryError"),

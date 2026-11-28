@@ -325,9 +325,15 @@ class Runner:
     def _charge(self, action: str, args: dict, budget: Budget):
         """One builtin action of a macro, under the tool's shared budget."""
         self._spend(budget, _cost(action, args))
-        result = self.game._do(action, args)
-        self._spend(budget, 0)
-        return result
+        return self._run_builtin(action, args, budget)
+
+    def _run_builtin(self, action: str, args: dict, budget: Budget):
+        """Run a builtin whose declared cost is already charged; charge the presses it ran beyond that (`walk_to`)."""
+        before = self.game.presses
+        try:
+            return self.game._do(action, args)
+        finally:
+            self._spend(budget, max(0, self.game.presses - before - _cost(action, args)))
 
     def _spend(self, budget: Budget, inputs: int, frames: int = 0) -> None:
         if time.monotonic() > budget.deadline or self.game.frames + frames > budget.frame_end:
@@ -345,7 +351,7 @@ class Runner:
             )
         match method:
             case "press":
-                return game._do("press", {"button": args.get("button"), "times": args.get("times", 1)})
+                return self._run_builtin("press", {"button": args.get("button"), "times": args.get("times", 1)}, budget)
             case "hold" | "wait":
                 buttons, frames = args.get("buttons", []) if method == "hold" else [], args.get("frames")
                 if not isinstance(buttons, list) or set(buttons) - set(BUTTONS):
@@ -364,7 +370,7 @@ class Runner:
         if depth + 1 > MAX_DEPTH:
             raise _Violation(f"capabilities may call each other at most {MAX_DEPTH} deep")
         if name in capabilities.ACTIONS[:-1]:
-            return game._do(name, call_args)
+            return self._run_builtin(name, call_args, budget)
         found = next((c for c in game.registry.active() if c["name"] == name), None)
         if found is None:
             raise ValueError(f"no builtin action or active capability named {name!r}")

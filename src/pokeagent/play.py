@@ -81,6 +81,20 @@ def write_atomic(path: Path, data: bytes) -> None:
     tmp.replace(path)
 
 
+def write_atomic_pair(first: Path, first_data: bytes, second: Path, second_data: bytes | None) -> None:
+    """Both files are written before either is replaced, so a failed write leaves both as they were.
+    No `second_data` removes `second`."""
+    tmps = [(first, first.with_suffix(first.suffix + ".tmp"), first_data)]
+    if second_data is not None:
+        tmps.append((second, second.with_suffix(second.suffix + ".tmp"), second_data))
+    for _, tmp, data in tmps:
+        tmp.write_bytes(data)
+    for path, tmp, _ in tmps:
+        tmp.replace(path)
+    if second_data is None:
+        second.unlink(missing_ok=True)
+
+
 class Game:
     """The live emulator and adapter. One lock serialises every call. The adapter drives this object as its
     emulator, so `run` can pace emulation (`speed` x real time) and feed the viewer. `start` makes a new emulator
@@ -102,6 +116,7 @@ class Game:
         self.registry: Registry | None = registry
         self.library, self.tkv = library, tkv
         self.frames = 0  # emulated frames since start, for tool budgets
+        self.presses = 0  # `run` calls with a button held, for the tools' input budget
         self.lock = threading.Lock()
         self.fps = emu.info["fps"]
         self._shown = 0.0
@@ -112,6 +127,7 @@ class Game:
     def run(self, buttons=(), frames: int = 1) -> None:
         self.emu.run(buttons, frames)
         self.frames += frames
+        self.presses += bool(buttons)
         if self.speed:
             time.sleep(frames / (self.fps * self.speed))  # ponytail: ignores emulation time; fine at watch speeds
         if self.viewer and time.monotonic() - self._shown > 1 / 30:
@@ -408,9 +424,13 @@ class Runner:
         with self._after_lock:
             state = self.game.save_state()  # one emulator save: a second one could fail after the action is committed
             try:
-                write_atomic(self.run_dir / "recovery.state", state)
                 tkv = self.run_dir / "tkv.json"  # the tools' timeline store is part of the recovery snapshot
-                _put(self.run_dir / "recovery.tkv.json", tkv.read_bytes() if tkv.exists() else None)
+                write_atomic_pair(
+                    self.run_dir / "recovery.state",
+                    state,
+                    self.run_dir / "recovery.tkv.json",
+                    tkv.read_bytes() if tkv.exists() else None,
+                )
             except OSError as e:  # the emulator is ahead of the file: report it as failed so it restarts from the file
                 raise EmulatorError(f"the recovery state could not be written: {e}") from e
             self._actions += 1
