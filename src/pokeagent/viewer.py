@@ -346,13 +346,14 @@ class _RunServer(ThreadingHTTPServer):
             for e in saved[:GALLERY]
         )
         more = f"<p>{len(saved) - GALLERY} older checkpoints not shown.</p>" if len(saved) > GALLERY else ""
-        latest = (
+        live = stats.live(run_dir)
+        latest = (  # a live run gets the element even before its first state: the refresh fills it in
             f'<img id="frame" src="/run/{name}/latest.png" alt="latest game screen">'
-            if play.latest_path(run_dir)
+            if live or play.latest_path(run_dir)
             else ""
         )
         refresh = ""
-        if stats.live(run_dir):  # the run is playing: redraw the latest frame every couple of seconds
+        if live:  # the run is playing: redraw the latest frame every couple of seconds
             refresh = (
                 '<script>const f = document.getElementById("frame");'
                 'if (f) setInterval(() => { f.src = "/run/' + name + '/latest.png?t=" + Date.now(); }, 2000);</script>'

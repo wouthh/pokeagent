@@ -131,6 +131,10 @@ def test_browse_refreshes_the_frame_of_a_live_run(runs, tmp_path):
     with (tmp_path / "runs" / "r1" / ".lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         assert b"setInterval" in get(runs + "/run/r1")[1]
+    (tmp_path / "runs" / "r2" / ".lock").touch()
+    with (tmp_path / "runs" / "r2" / ".lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        assert b'id="frame"' in get(runs + "/run/r2")[1]  # live before its first state: the refresh fills it in
 
 
 def test_browse_is_read_only_and_only_serves_listed_names(runs):
