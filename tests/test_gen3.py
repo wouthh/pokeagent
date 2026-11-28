@@ -419,3 +419,10 @@ def test_map_identifiers_name_rooms_and_fall_back_to_the_section_and_group_numbe
 def test_rooms_have_their_own_names_on_the_real_roms(gba, game, where, section, name):
     adapter, _ = gba(game)
     assert adapter.map_name(*where, section) == name
+
+
+def test_rom_pointers_reach_the_second_half_of_an_expanded_dump():
+    adapter = stub_adapter()
+    adapter.rom = bytes(0x2000000)  # a 32 MiB dump: pointers start with 0x09 past 16 MiB
+    assert adapter._rom_at(0x09000100, 0x18) == 0x1000100
+    assert adapter._rom_at(0x0A000000) is None and adapter._rom_at(0x09FFFFFF, 2) is None
