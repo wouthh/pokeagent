@@ -132,6 +132,9 @@ class Game:
             self._shown = time.monotonic()
             self.viewer.frame = self.emu.frame()
 
+    def frame(self) -> Image.Image:
+        return self.emu.frame()
+
     def png(self, scale: int = 3) -> bytes:
         frame = self.emu.frame()
         out = io.BytesIO()
