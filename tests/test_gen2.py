@@ -438,8 +438,8 @@ def test_area_matches_the_full_attribute_pointer():
     rom[0x400:0x405] = b"HOME\x50"
     g.rom = bytes(rom)
     m = Memory()
-    m.put(g.ram.MAP_ATTRIBUTES, bytes([1, 0, 0, 0x34, 0x12]))
-    m.put(g.ram.TILESET, bytes([7]))
+    m.put(g.ram.MAP_ATTRIBUTES, bytes([1, 7, 0, 0x34, 0x12]))
+    m.put(g.ram.TILESET, bytes([0x37]))  # the tileset's ROM bank differs from its id
     assert g.map_name(m, 0x0999) == "HOME (map 9:153)"
 
 
