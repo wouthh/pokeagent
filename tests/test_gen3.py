@@ -426,3 +426,55 @@ def test_rom_pointers_reach_the_second_half_of_an_expanded_dump():
     adapter.rom = bytes(0x2000000)  # a 32 MiB dump: pointers start with 0x09 past 16 MiB
     assert adapter._rom_at(0x09000100, 0x18) == 0x1000100
     assert adapter._rom_at(0x0A000000) is None and adapter._rom_at(0x09FFFFFF, 2) is None
+
+
+class ScreenEmu:
+    """An emulator whose picture is a function of the frame number and the buttons pressed so far."""
+
+    def __init__(self, fading_until=0, reacts_at=None):
+        self.frame_no, self.pressed, self.fading_until, self.reacts_at = 0, [], fading_until, reacts_at
+        self.reacted = False
+
+    def run(self, buttons=(), frames=1):
+        for _ in range(frames):
+            self.frame_no += 1
+            if buttons and self.frame_no >= self.fading_until:  # input during the fade is ignored
+                self.pressed.append(self.frame_no)
+                self.reacted = True
+
+    def frame(self):
+        picture = self.frame_no if self.frame_no < self.fading_until else -1  # a fade changes every frame
+        picture = (picture, self.reacted and self.frame_no >= self.reacts_at if self.reacts_at else self.reacted)
+        return type("Image", (), {"tobytes": lambda self_: repr(picture).encode()})()
+
+
+def test_press_waits_for_a_fade_to_end_and_for_the_screen_to_settle():
+    adapter = stub_adapter()
+    emu = ScreenEmu(fading_until=30)
+    adapter.press(emu, "a")
+    assert emu.pressed and emu.pressed[0] >= 30  # nothing was pressed while the picture changed
+    assert emu.frame_no >= emu.pressed[-1] + 6  # and it ran on until the screen settled
+    quick = ScreenEmu()
+    adapter.press(quick, "a")
+    assert len(quick.pressed) == 6 and quick.frame_no < 60  # a settled screen: pressed at once, held 6 frames
+    never = ScreenEmu(fading_until=10**6)  # an animated screen: capped, still pressed
+    adapter.press(never, "a")
+    assert never.frame_no < 200
+
+
+def test_tap_ignores_the_screen_and_ruby_reads_both_message_windows():
+    adapter = stub_adapter()
+    emu = ScreenEmu(fading_until=10**6)
+    adapter.tap(emu, "b", hold=2, wait=8)
+    assert emu.frame_no == 10 and len(emu.pressed) == 0
+    rs = stub_adapter("rs")
+    window = bytearray(0x30)
+    struct.pack_into("<H", window, 0x16, 3)  # printing
+    struct.pack_into("<I", window, 0x20, 0x08000100)
+    waiting = bytearray(window)
+    struct.pack_into("<H", waiting, 0x16, 8)  # waiting for A at a paragraph's end
+    layout = LAYOUTS["rs"]
+    emu = StubEmu(**{f"x{layout.FIELD_WINDOW:x}": bytes(0x30), f"x{layout.MENU_WINDOW:x}": bytes(waiting)})
+    assert rs._printers(emu) == [(1, 0x08000100, 2)]  # the intro's text lives in the menu window
+    emu = StubEmu(**{f"x{layout.FIELD_WINDOW:x}": bytes(window), f"x{layout.MENU_WINDOW:x}": bytes(0x30)})
+    assert rs._printers(emu) == [(0, 0x08000100, 0)]

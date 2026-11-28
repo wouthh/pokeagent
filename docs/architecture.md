@@ -145,6 +145,13 @@ pokefirered symbol files, by family (`rs`, `e`, `frlg`); names come from the use
   waits and never answers anything it cannot tell is a prompt.
 - **`advance_text` presses B, not A.** Both continue a message, but A talks to the person in front of you again once
   the box has closed. It stops at any menu or yes/no and waits through a running script (a cutscene).
+- **`press` waits for the screen.** The game ignores input during a palette fade and while a menu or an animation
+  starts, so `press` first waits until the picture has stood still (up to 60 frames; an animated screen is pressed
+  anyway), holds 6 frames, waits until the picture reacts and settles again. Every press of `times > 1` lands, and the
+  result and screenshot show the settled screen. `advance_text` uses the raw `tap` (a ▼ blinks, so its screen never
+  settles); a step that ends on a warp waits for the fade. The Ruby/Sapphire intro's text lives in the menu window,
+  which `_printers` reads next to the field's message window. A full-screen menu (the clock) is `menu`, not `dialog`,
+  even while its script runs.
 - **Walk grid.** The game's own map grid (`gBackupMapLayout`/`VMap`, with the 7-tile border of the neighbouring maps, so
   a path can cross an edge): collision bits 10-11, the tilesets' metatile behaviours read from the ROM (ledges are
   one-way hops over two tiles, water needs Surf and waterfalls are blocked), people from the object events, warps

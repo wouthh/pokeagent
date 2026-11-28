@@ -98,6 +98,7 @@ LAYOUTS = {
         BATTLE_TEXT=(0x020238CC, 0x100),
         PRINTERS=None,
         FIELD_WINDOW=0x0202E87C,
+        MENU_WINDOW=0x0202E908,
         MESSAGE_MODE=0x030005A8,
         SCRIPT=0x030005B8,
         TASKS=0x03004B20,
@@ -141,6 +142,7 @@ LAYOUTS = {
         BATTLE_TEXT=(0x02022E2C, 0x12C),
         PRINTERS=0x020201B0,
         FIELD_WINDOW=None,
+        MENU_WINDOW=None,
         MESSAGE_MODE=None,
         SCRIPT=0x03000E40,
         TASKS=0x03005E00,
@@ -184,6 +186,7 @@ LAYOUTS = {
         BATTLE_TEXT=(0x0202298C, 0x12C),
         PRINTERS=0x02020034,
         FIELD_WINDOW=None,
+        MENU_WINDOW=None,
         MESSAGE_MODE=None,
         SCRIPT=0x03000EB0,
         TASKS=0x03005090,
@@ -306,7 +309,7 @@ WATER = (0x10, 0x11, 0x12, 0x14, 0x15)  # pond, deep, ocean...: walkable only wh
 WATERFALL = 0x13
 JUMPS = {0x38: "right", 0x39: "left", 0x3A: "up", 0x3B: "down"}  # ledges: one way, two tiles
 LEDGE_MARKS = {"down": "v", "left": "<", "right": ">", "up": "^"}
-REACT_FRAMES = 12
+REACT_FRAMES = 30
 
 
 def load_map_names(family: str) -> dict[tuple[int, int], str]:
@@ -628,12 +631,16 @@ class Gen3:
                 for i in range(32)
                 if raw[i * 0x24 + 0x1B]
             ]
-        window = emu.read(L.FIELD_WINDOW, 0x30)
-        state = struct.unpack_from("<H", window, 0x16)[0]
-        if not state:  # 0: finished
-            return []
-        waiting = state in (5, 8, 9)  # wait for a button, ▼ after a paragraph, ▼ after a scroll
-        return [(0, struct.unpack_from("<I", window, 0x20)[0], 2 if waiting else 0)]
+        out = []
+        for i, where in enumerate(
+            (L.FIELD_WINDOW, L.MENU_WINDOW)
+        ):  # the field's message box, then the menus' (the intro)
+            window = emu.read(where, 0x30)
+            state = struct.unpack_from("<H", window, 0x16)[0]
+            if state:  # 0: finished
+                waiting = state in (5, 8, 9)  # wait for a button, ▼ after a paragraph, ▼ after a scroll
+                out.append((i, struct.unpack_from("<I", window, 0x20)[0], 2 if waiting else 0))
+        return out
 
     def _controller(self, emu: Emulator) -> int:
         return self._u32s(emu, self.layout.CONTROLLERS, 1)[0]
@@ -683,10 +690,12 @@ class Gen3:
             kind = "battle"
         elif cursor:
             kind = "menu"
-        elif printing or waiting or script_mode:  # a running script has the controls (a message, a cutscene)
+        elif printing or waiting:
             kind = "dialog"
         elif fns and callback and callback != fns["overworld"]:
-            kind = "menu"  # a full-screen menu (bag, party, naming, title, ...)
+            kind = "menu"  # a full-screen menu (bag, party, naming, the clock, title, ...)
+        elif script_mode:  # a running script has the controls (a cutscene)
+            kind = "dialog"
         else:
             kind = "overworld"
         text = ""
@@ -1011,9 +1020,40 @@ class Gen3:
 
     # ---- macro actions (controller input only) ----
 
-    def press(self, emu: Emulator, button: str, hold: int = 4, wait: int = 12) -> None:
+    @staticmethod
+    def _picture(emu: Emulator) -> int:
+        return hash(emu.frame().tobytes())
+
+    def _settled(self, emu: Emulator, still: int = 3, cap: int = 60) -> bool:
+        """Run until the picture has stood still for `still` looks two frames apart (a fade, a menu opening or a
+        battle animation is over), at most `cap` frames. False when it never did (an animated screen)."""
+        last, same = None, 0
+        for _ in range(0, cap, 2):
+            now = self._picture(emu)
+            same = same + 1 if now == last else 0
+            if same >= still:
+                return True
+            last = now
+            emu.run([], 2)
+        return False
+
+    def tap(self, emu: Emulator, button: str, hold: int = 4, wait: int = 12) -> None:
+        """Hold `button`, release it and wait `wait` frames, with no regard for the screen."""
         emu.run([button], hold)
         emu.run([], wait)
+
+    def press(self, emu: Emulator, button: str, hold: int = 6, wait: int = 12) -> None:
+        """Press once the screen has settled (the game ignores input during a fade or while a menu opens), then wait
+        until the screen reacts and settles again, so the next press lands and the result shows the settled screen."""
+        self._settled(emu)
+        before = self._picture(emu)
+        emu.run([button], hold)
+        emu.run([], wait)
+        for _ in range(wait, REACT_FRAMES, 4):
+            if self._picture(emu) != before:
+                break
+            emu.run([], 4)
+        self._settled(emu)
 
     def _position(self, emu: Emulator) -> tuple[int, int, int]:
         """(map id, x, y) of the player; the map id is -1 while the save block is not there yet."""
@@ -1054,6 +1094,9 @@ class Gen3:
         self._settle(emu)
         emu.run([], 2)
         now = self._position(emu)
+        if now[0] == start[0] and now != start:
+            self._settled(emu, cap=40)  # a warp fades in a few frames after the step ends
+            now = self._position(emu)
         if now[0] != start[0]:
             self._settle_map(emu)
             now = self._position(emu)
@@ -1115,7 +1158,7 @@ class Gen3:
                 quiet = 0
                 if presses >= max_presses:
                     return {"outcome": "press_limit", "presses": presses}
-                self.press(emu, "b", hold=2, wait=8)
+                self.tap(emu, "b", hold=2, wait=8)
                 presses += 1
             elif screen["printing"]:
                 quiet = 0
@@ -1123,7 +1166,7 @@ class Gen3:
             elif in_battle and not self.layout.PRINTERS:  # Ruby and Sapphire: no printer to watch, B moves it along
                 if presses >= max_presses:
                     return {"outcome": "press_limit", "presses": presses}
-                self.press(emu, "b", hold=2, wait=20)
+                self.tap(emu, "b", hold=2, wait=20)
                 presses += 1
             elif screen["busy"] and not in_battle and idle < 600:  # a script is still running (a cutscene): wait for it
                 idle += 4
@@ -1177,7 +1220,7 @@ class Gen3:
             if screen["mode"] == "overworld":
                 return bool(answered)
             if screen["waiting"]:
-                self.press(emu, "b", wait=20)
+                self.tap(emu, "b", wait=20)
             elif screen["cursor"] and not screen["printing"]:
                 # the question's own YES/NO is no task of its own, but the Start menu's: YES is the first entry
                 self.press(emu, "a", wait=60)
