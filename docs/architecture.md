@@ -298,13 +298,13 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
     builtin action, a macro or another tool), `log(message)`, `kv` (durable per tool and scope, in the memory store)
     and `tkv` (`tkv.json` in the run directory, saved with every checkpoint and every action's recovery snapshot, and put back by a restore or an emulator restart). Each store
     holds at most 64 KB of JSON.
-  - *Contract, enforced by the orchestrator:* arguments against `params` and the `preconditions` before the call
-    (a refusal does not count against the tool); during it one budget shared by every nested call (18,000 frames,
-    600 controller inputs counted as the game executes them, 60 s), at most 4 nested calls, and the `invariants` after every request that ran the game; after it
-    the result against `returns`, the `postconditions`, and every changed fingerprint group must be a declared
-    effect. Undeclared party, bag or money changes therefore fail the call. A refused ctx request (a bad argument, a
-    failed nested call) is an error the tool may catch; a budget, depth, invariant or protocol violation ends the
-    call. Failures count like failed macro calls and roll a version back.
+  - *Contract, enforced by the orchestrator:* arguments against `params` and the `preconditions` before the call (a
+    refusal does not count against the tool); during it one budget shared by every nested call (18,000 frames, 600
+    controller inputs counted as the game executes them, 60 s), at most 4 nested calls, and the `invariants` after
+    every request that ran the game; after it the result against `returns`, the `postconditions`, and every changed
+    fingerprint group must be a declared effect. Undeclared party, bag or money changes therefore fail the call. A
+    refused ctx request (a bad argument, a failed nested call) is an error the tool may catch; a budget, depth,
+    invariant or protocol violation ends the call. Failures count like failed macro calls and roll a version back.
   - *Play:* `run_tool(name, args)` is one action; the result, the tool's log and the state are reported like a
     macro's.
   - *Validation* (`validation.py`, orchestrator-owned; the agent can ask for one but not change it): the manifest;
