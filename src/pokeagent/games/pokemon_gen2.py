@@ -7,8 +7,9 @@ engine works without an entry here. The base game is guessed from the header and
 invariants once a game runs. All game progress goes through controller input; RAM is only read.
 
 Facts the code cannot say by itself (verified live on the three games):
-- The game state lives in WRAM bank 1 (D000-DFFF). The worker's `read` sees whichever bank SVBK selects there, so every
-  read of that range is trusted only while FF70 & 7 is 0 or 1 (title screens and intros map other banks).
+- The game state lives in WRAM bank 1 (D000-DFFF). SameBoy's memory map points D000 at bank 1 whatever SVBK (FF70)
+  selects (the game switches banks 2-7 in for a few frames, e.g. when a battle starts), so reads there never depend on
+  it; banks 2-7 sit at 0x10000. Do not guard these reads on FF70: that made a running game read as no game.
 - A tile of the tile map is a tile id, not a character: map tiles and Pokémon pictures decode as letters, so text is
   only read inside boxes (┌ ... ┘). The dialog box is rows 12-17 and its waiting arrow sits on the bottom border.
 - Collision is stored per 16x16 step square (four bytes per block: top-left, top-right, bottom-left, bottom-right).
@@ -378,17 +379,9 @@ class Gen2(Gen1):
             mode["mode"] = "menu"
         return mode
 
-    def _wram_ok(self, emu: Emulator) -> bool:
-        """D000-DFFF is bank 1 (where the game state lives) only while SVBK selects it (0 selects bank 1 too)."""
-        return emu.read(0xFF70, 1)[0] & 7 in (0, 1)
-
     def state(self, emu: Emulator) -> dict:
-        ok = self._wram_ok(emu)
-
-        def read(addr: int, n: int) -> bytes:
-            return bytes(n) if 0xD000 <= addr < 0xE000 and not ok else emu.read(addr, n)
-
-        self.check_layout(emu if ok else SimpleNamespace(read=read))
+        read = emu.read
+        self.check_layout(emu)
         ram = self.ram
         group, number, y, x = read(ram.MAP_GROUP, 4)
         height, width = read(ram.MAP_HEIGHT, 2)
@@ -422,7 +415,7 @@ class Gen2(Gen1):
                 }
             )
         player_name = self.decode(read(ram.PLAYER_NAME, 11))
-        in_game = ok and bool(group and height and width) and bool(player_name) and "·" not in player_name
+        in_game = bool(group and height and width) and bool(player_name) and "·" not in player_name
         battle_kind = read(ram.IS_IN_BATTLE, 1)[0] if in_game else 0
         battle = None
         if battle_kind:
