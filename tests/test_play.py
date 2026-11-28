@@ -841,3 +841,40 @@ def test_a_stuck_restore_skips_checkpoints_from_before_battle_progress(tmp_path)
     assert runner._restore_progress() is False
     runner.checkpoint("after damage")
     assert runner._restore_progress() is True
+
+
+class Hands:
+    """A stand-in game window whose keyboard plays `script`, (button or None, steps) pairs, then closes it."""
+
+    def __init__(self, script):
+        self.steps = [frozenset({b} if b else ()) for b, n in script for _ in range(n)]
+        self.closed, self.frame, self.status, self.panel = threading.Event(), None, "", ""
+
+    @property
+    def buttons(self):
+        if not self.steps:
+            self.closed.set()
+            return frozenset()
+        return self.steps.pop(0)
+
+
+def test_play_by_hand_keeps_an_in_game_save_and_leaves_the_run_alone(game, rom_path, tmp_path, monkeypatch):
+    gen1, _, bedroom = game
+    run_dir = new_run(rom_path, None, tmp_path)
+    (run_dir / "recovery.state").write_bytes(bedroom)
+    monkeypatch.setattr(play_module.time, "sleep", lambda seconds: None)
+    out = tmp_path / "mine.sav"
+
+    def play_with(script):
+        monkeypatch.setattr(play_module, "_viewer", lambda watch, web: (Hands(script), None))
+        return play_module.play_by_hand(run_dir, tmp_path, out=out, force=True)
+
+    assert play_with([("down", 20), (None, 20)]) == "you did not save in game; nothing written"
+    assert not out.exists()
+    # START, down to SAVE, A, YES: a new game's START menu is POKéMON, ITEM, the player, SAVE, OPTION, EXIT.
+    menu = [("start", 2), (None, 15), *[("down", 2), (None, 8)] * 3, ("a", 2), (None, 100)]
+    assert play_with([*menu, ("a", 2), (None, 150)]) == f"wrote your in-game save to {out}"
+    assert gen1.save_complete(out.read_bytes()) and (run_dir / "recovery.state").read_bytes() == bedroom
+    out.write_bytes(b"")
+    with pytest.raises(ValueError, match="exists; pass --force"):
+        play_module.play_by_hand(run_dir, tmp_path, out=out)

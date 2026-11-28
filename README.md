@@ -63,14 +63,17 @@ user namespaces are disabled), pokeagent refuses to start rather than running un
    3 to 7 minutes and cost $1 to $2 of Claude usage (reported per session in `play.log` and by `pokeagent stats`).
    `--model` and `--effort` choose the Claude model and reasoning effort.
 3. Watch it: a window opens with the game as it plays, the last action and a panel with the run's status
-   (`--no-watch` plays without it). `play.log` in the run folder has every message, tool call and session summary
-   (`tail -f` it), and `notes.md` the agent's own notes.
+   (`--no-watch` plays without it). `--web 8765` also shows the same on a read-only web page,
+   `http://127.0.0.1:8765/` (see below for other devices). `play.log` in the run folder has every message, tool call
+   and session summary (`tail -f` it), and `notes.md` the agent's own notes.
 4. Continue with `uv run pokeagent resume <run id>`. Without `--max-sessions` it plays until the objective
    is met, the run pauses for you, or you press Ctrl-C (which saves a checkpoint first). When usage limits are hit,
    it waits for the reset.
 5. Look at what it did: `pokeagent status <run id>`, `pokeagent stats <run id>` and `pokeagent capability list
-   <run id>`. `pokeagent view <run id>` shows the game where it stopped, and `pokeagent export-sav <run id>` writes
-   it as an ordinary `.sav` to load in any Game Boy emulator (see below). Problems the agent finds in pokeagent itself go to `~/.local/share/pokeagent/harness-issues.md`.
+   <run id>`. `pokeagent view <run id>` shows the game where it stopped, `pokeagent view <run id> --keyboard` lets you
+   play on from there yourself, and `pokeagent export-sav <run id>` writes it as an ordinary `.sav` to load in any
+   Game Boy emulator (see below). Problems the agent finds in pokeagent itself go to
+   `~/.local/share/pokeagent/harness-issues.md`.
 
 ## Playing
 
@@ -83,6 +86,7 @@ uv run pokeagent restore 20261127-170000                      # list the checkpo
 uv run pokeagent restore 20261127-170000 1764263000000000000.state  # go back; learned knowledge stays
 uv run pokeagent status 20261127-170000                       # where a run stands
 uv run pokeagent view 20261127-170000                         # show the game where it stopped (or at a checkpoint)
+uv run pokeagent view 20261127-170000 --keyboard --out mine.sav  # play on yourself; keep your in-game save
 uv run pokeagent export-sav 20261127-170000                   # write it as a .sav for other emulators
 uv run pokeagent stats 20261127-170000 --compare 20261201-090000  # per-session metrics, compared at milestones
 uv run pokeagent capability list 20261127-170000              # the observations, macros and tools it defined
@@ -96,6 +100,18 @@ format that other emulators (mGBA, SameBoy, BGB, PyBoy and others) load next to 
 `<ROM name>.sav` in the run folder unless you pass `--out`, and never replaces a file without `--force`. Give a
 checkpoint name (from `pokeagent restore <run id>`) to export or view that one instead.
 
+`view --keyboard` plays a copy of the run's game in the window: arrow keys move, X is A, Z is B, Enter is START and
+Backspace is SELECT. There is no sound (pokeagent's emulator drops audio). The run does not change; with `--out`, a
+save you make in game is written there as a `.sav` when you close the window (`--force` replaces an existing file).
+To carry on with sound, or to continue from such a `.sav`, open it in another emulator; keep it in its own folder
+next to a copy of the ROM, so it cannot replace a save of yours with the same name.
+
+`--web [HOST:]PORT` on `play`, `resume` and `view` serves a read-only page with the live game screen (about 10
+pictures a second), the last action and the run panel; it has no controls. By default only this machine can open
+it. `--web 0.0.0.0:8765` listens on your network too, for a phone or another computer: then anyone on that network
+who can reach the port sees the page, and the firewall must let the port in (on Fedora,
+`sudo firewall-cmd --zone=<your Wi-Fi zone> --add-port=8765/tcp`, which lasts until firewalld reloads or the
+machine restarts).
 When a problem keeps costing actions, the agent may ask for a development session, which writes and validates a
 code tool away from the live game. `--dev-share` (default 0.3 of the run's tokens), `--dev-attempts` (2 per tool),
 `--dev-timeout` (45 minutes) and `--dev-validations` (10 per session) on `play` and `resume` limit them; the first

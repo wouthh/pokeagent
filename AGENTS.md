@@ -17,7 +17,7 @@ first use case, not an architectural constraint. Design and decisions: [docs/arc
     line + bytes protocol, no memory-write op), `client.py` (`Emulator`, the orchestrator's handle).
   - `games/pokemon_gen1.py`: the Red/Blue adapter (state, screen modes, walk grid, macro actions, scoring).
   - `server.py`: the `game` MCP server (token and Host checks, tools, budgets). `play.py`: runs, the live `Game`,
-    the session loop, `view` and `export-sav`. `viewer.py`: the game window. `prompts/play.md`: the play-mode system prompt.
+    the session loop, `view` and `export-sav`. `viewer.py`: the game window, the `--web` page and the keyboard map for `view --keyboard`. `prompts/play.md`: the play-mode system prompt.
   - `stats.py`: `status`, `stats [--compare]` and the viewer panel, all from events.
   - `stuck.py`: the stuck ladder (progress from `progress_score`, the five levels and their notices); the runner
     records milestones and acts on the levels.
