@@ -152,6 +152,13 @@ pokefirered symbol files, by family (`rs`, `e`, `frlg`); names come from the use
   settles); a step that ends on a warp waits for the fade. The Ruby/Sapphire intro's text lives in the menu window,
   which `_printers` reads next to the field's message window. A full-screen menu (the clock) is `menu`, not `dialog`,
   even while its script runs.
+- **Text on Ruby and Sapphire** is a window holding the string's start and an index into it, so the next character is
+  their sum; the intro's questions (boy or girl, the name) are asked in the menu window and shown as the screen text of
+  that menu. In battle, `advance_text` waits (up to 900 frames) through animations for the next message or menu, and
+  the result shows the latest battle message from its buffer. `press` also waits for a message to finish printing.
+- **Exits.** Only warp events on door, stair, ladder and arrow tiles (behaviours 0x60-0x7F) are drawn as `W` and walked
+  to; the maps' other warp events (a second mat tile beside a door, the intro truck's door before it opens) do not fire.
+  A step that pushes into the wall from such a tile waits for the warp and reports `map_changed`.
 - **Walk grid.** The game's own map grid (`gBackupMapLayout`/`VMap`, with the 7-tile border of the neighbouring maps, so
   a path can cross an edge): collision bits 10-11, the tilesets' metatile behaviours read from the ROM (ledges are
   one-way hops over two tiles, water needs Surf and waterfalls are blocked), people from the object events, warps

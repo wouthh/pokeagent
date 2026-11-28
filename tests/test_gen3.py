@@ -23,6 +23,7 @@ from pokeagent.games.pokemon_gen3 import (
     decode_mon,
     decode_money,
     decode_quantity,
+    exit_warps,
     flag,
     layout_problems,
     load_map_names,
@@ -129,7 +130,7 @@ def synthetic_grid(rows: list[str], surfing=False) -> Grid:
         for x, c in enumerate(row):
             i = (y + 7) * stride + x + 7
             tiles[i] = 0x400 if c == "#" else 0
-            behaviours[i] = {"~": 0x15, "v": 0x3B, "^": 0x3A, "<": 0x39, ">": 0x38}.get(c, 0)
+            behaviours[i] = {"D": 0x65, "~": 0x15, "v": 0x3B, "^": 0x3A, "<": 0x39, ">": 0x38}.get(c, 0)
             if c in "v^<>":
                 tiles[i] = 0x400  # ledge tiles are blocked from every other side
     return Grid(width, height, tiles, behaviours, surfing)
@@ -442,6 +443,9 @@ class ScreenEmu:
                 self.pressed.append(self.frame_no)
                 self.reacted = True
 
+    def read(self, addr, n):
+        return bytes(n)
+
     def frame(self):
         picture = self.frame_no if self.frame_no < self.fading_until else -1  # a fade changes every frame
         picture = (picture, self.reacted and self.frame_no >= self.reacts_at if self.reacts_at else self.reacted)
@@ -478,3 +482,22 @@ def test_tap_ignores_the_screen_and_ruby_reads_both_message_windows():
     assert rs._printers(emu) == [(1, 0x08000100, 2)]  # the intro's text lives in the menu window
     emu = StubEmu(**{f"x{layout.FIELD_WINDOW:x}": bytes(window), f"x{layout.MENU_WINDOW:x}": bytes(0x30)})
     assert rs._printers(emu) == [(0, 0x08000100, 0)]
+
+
+def test_only_door_tiles_count_as_exits():
+    grid = synthetic_grid([".D.."])
+    assert exit_warps(grid, {(0, 0), (1, 0), (2, 0)}) == {(1, 0)}  # the mat beside a door is bookkeeping, not an exit
+    grid.warps = exit_warps(grid, {(0, 0), (1, 0)})
+    assert "W" in grid.render((0, 0)) and grid.render((0, 0)).count("W") == 1
+    assert grid.path((0, 0), (3, 0)) is not None
+
+
+def test_ruby_text_is_read_at_the_windows_index_not_at_its_start():
+    rs = stub_adapter("rs")
+    window = bytearray(0x30)
+    struct.pack_into("<H", window, 0x16, 3)
+    struct.pack_into("<H", window, 0x1E, 26)
+    struct.pack_into("<I", window, 0x20, 0x08000100)
+    layout = LAYOUTS["rs"]
+    emu = StubEmu(**{f"x{layout.FIELD_WINDOW:x}": bytes(window), f"x{layout.MENU_WINDOW:x}": bytes(0x30)})
+    assert rs._printers(emu) == [(0, 0x08000100 + 26, 0)]
