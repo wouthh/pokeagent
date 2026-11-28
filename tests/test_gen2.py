@@ -459,3 +459,49 @@ def test_press_settles_before_returning(game):
     gen2.press(emu, "down")
     gen2.press(emu, "down")
     assert gen2.state(emu)["screen"]["cursor_at"][1] == row + 4
+
+
+def page(*lines: str) -> bytes:
+    """A full-screen text page with no box: blank tiles, text rows, and map-like noise elsewhere is not allowed."""
+    tiles = bytearray([0x7F] * 360)
+    for y, line in enumerate(lines):
+        tiles[y * 20 : y * 20 + len(line)] = bytes(encode(line))
+    return bytes(tiles)
+
+
+def test_a_page_without_boxes_is_text_all_over():
+    tiles = page("     YOUR NAME?", "", "  A B C D E F G H I", "  J K L M N O P Q R")
+    assert Gen2.screen_text(tiles)[:4] == ["     YOUR NAME?", "", "  A B C D E F G H I", "  J K L M N O P Q R"]
+    assert Gen2.screen_mode(tiles, False)["mode"] == "menu"  # advance_text must stop here, not type letters
+
+
+def test_overworld_stays_empty_and_blank_screens_are_not_pages():
+    noise = bytes(encode("PKMN")) + bytes([0x01, 0x02]) * 178  # map tiles: almost no blank, some letter-like ids
+    assert not any(Gen2.screen_text(noise)) and Gen2.screen_mode(noise, False)["mode"] == "overworld"
+    black = bytes([0x7F] * 360)  # a fade
+    assert not any(Gen2.screen_text(black)) and Gen2.screen_mode(black, False)["mode"] == "overworld"
+    logo = page("", "", "", "").replace(b"\x7f\x7f\x7f", bytes([0x79, 0x7A, 0x7C]), 1)  # title logo: blank, no letters
+    assert not any(Gen2.screen_text(logo)) and Gen2.screen_mode(logo, False)["mode"] == "overworld"
+
+
+def test_boxes_win_over_the_page_rule():
+    tiles = bytearray(dialog("Hello there"))
+    assert (
+        Gen2.screen_text(bytes(tiles))[14] == " Hello there"
+        and Gen2.screen_mode(bytes(tiles), False)["mode"] == "dialog"
+    )
+
+
+def test_naming_screen_shows_its_grid(find_rom):
+    path = find_rom(ROM_NAMES["gold"])
+    gen2 = Gen2(path.read_bytes())
+    with Emulator(core_path("sameboy"), path, options=gen2.CORE_OPTIONS) as emu:
+        emu.run([], 300)
+        for _ in range(150):
+            gen2.press(emu, "a")
+            state = gen2.state(emu)
+            if any("YOUR NAME?" in line for line in state["screen_text"]):
+                assert state["screen"]["mode"] == "menu" and any("A B C D" in line for line in state["screen_text"])
+                assert gen2.advance_text(emu)["outcome"] == "menu"  # never types into the grid
+                return
+        raise AssertionError("no naming screen")

@@ -784,7 +784,7 @@ class Gen1:
         for _ in range(max_presses * 40):
             tiles = self.screen_tiles(emu)
             mode = self.screen_mode(tiles, bool(emu.read(self.ram.IS_IN_BATTLE, 1)[0]))
-            if mode["cursor"]:
+            if mode["cursor"] or mode["mode"] == "menu":
                 return {"outcome": "menu", "presses": presses}
             if mode["mode"] == "overworld":
                 quiet += 4
