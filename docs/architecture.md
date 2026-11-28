@@ -88,7 +88,7 @@ macros. `run.json` records the adapter's family, core and core options, so resto
   nothing tells a game is in progress, which keeps the check, the party and the map out of every Pokémon-shaped path:
   the runner treats a `frame_id` state as "screens only" (no milestones, no map, no grid, no walk guard text) and an
   action result always carries a screenshot, since there is no screen text. The fingerprint is the `screen` effect.
-- **Controller:** `press` is Gen 3's settle-waiting press. `walk`, `walk_to` and `advance_text` refuse with one
+- **Controller:** `press` waits for the picture to settle before and after the button. `walk`, `walk_to` and `advance_text` refuse with one
   sentence; macros and develop-mode tools still work through `press`. Text decoding of observations refuses (no
   charmap is known); `bytes`, integers and bits work.
 - **Progress** for the stuck ladder is novelty: screens not seen before on the timeline.

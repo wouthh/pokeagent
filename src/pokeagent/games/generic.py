@@ -53,8 +53,20 @@ class Generic:
     DEFAULT_OBJECTIVE = "Play this game and get as far into it as you can."
     DEFAULT_CHECK = None
     BUTTONS = ("a", "b", "start", "select", "up", "down", "left", "right")
-    press, _settled = Gen3.press, Gen3._settled
+    _settled = Gen3._settled  # waits for the picture to stand still
     _picture = staticmethod(Gen3._picture)
+
+    def press(self, emu, button: str, hold: int = 6, wait: int = 12) -> None:
+        """Press once the screen has settled, then wait until it reacts and settles again, so the next press lands."""
+        self._settled(emu)
+        before = self._picture(emu)
+        emu.run([button], hold)
+        emu.run([], wait)
+        for _ in range(wait, 30, 4):
+            if self._picture(emu) != before:
+                break
+            emu.run([], 4)
+        self._settled(emu)
 
     @classmethod
     def recognises(cls, rom: bytes) -> bool:
