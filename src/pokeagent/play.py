@@ -18,6 +18,7 @@ import shutil
 import signal
 import threading
 import time
+from collections import Counter
 from functools import partial
 from pathlib import Path
 
@@ -277,6 +278,8 @@ class Game:
         old, new = self.adapter.fingerprint(before), self.adapter.fingerprint(after)
         changed = [group for group in new if new[group] != old[group]]
         lines = [f"{name}: {outcome}", f"Changed: {', '.join(changed) or 'nothing'}"]
+        if before["in_game"] and after["in_game"] and set(changed) & {"party", "bag"}:
+            lines += what_changed(before, after)
         if not after["in_game"] or set(changed) & {"party", "bag", "money", "battle"}:
             lines.append(self._text(after))
         else:
@@ -408,6 +411,21 @@ def draw_variety(adapter, earlier: list[dict]) -> dict:
     }
 
 
+def what_changed(before: dict, after: dict) -> list[str]:
+    """Items gained or lost and Pokémon that joined or left the party, between two states of a game in progress."""
+    old, new = Counter(), Counter()
+    for bag, count in ((before["bag"], old), (after["bag"], new)):
+        for entry in bag:
+            count[entry["item"]] += entry["qty"]
+    gained = [f"+{item} x{n}" for item, n in (new - old).items()]
+    lost = [f"-{item} x{n}" + (" (none left)" if not new[item] else "") for item, n in (old - new).items()]
+    party = [Counter(f"{p['name']} ({p['species']})" for p in state["party"]) for state in (before, after)]
+    joined = [f"+{who}" for who in party[1] - party[0]]
+    left = [f"-{who}" for who in party[0] - party[1]]
+    lines = ["Bag: " + ", ".join(gained + lost)] if gained or lost else []
+    return lines + (["Party: " + ", ".join(joined + left)] if joined or left else [])
+
+
 def style_text(meta: dict, party: list[dict], glitches: str) -> list[str]:
     """The brief's play style lines: the natural style's house rules with the run's variety and team facts, and the
     game's `glitches` allowance when the run allows them. None for a direct run without glitches."""
@@ -426,7 +444,8 @@ def style_text(meta: dict, party: list[dict], glitches: str) -> list[str]:
             " PP Ups, Rare Candies.",
             "- Leave Pokémon in the PC when your team has no room or no use for them, and swap them back when they"
             " fit.",
-            f"- Nickname every Pokémon you take into your team; this run's names: {variety['nicknames']}.",
+            f"- Nickname every Pokémon you take into your team, each with its own name from this run's theme,"
+            f" {variety['nicknames']} (names of things from that theme, not the word itself).",
             f"- If you still have a starter to choose, choose {variety['starter']}.",
             "- Side quests for this run, to take up when they fit: " + " ".join(variety["side_quests"]),
         ]
@@ -480,7 +499,6 @@ class Runner:
         self._after_lock = threading.Lock()  # a save and its write stay together, and a restart waits for them
         self.ladder = stuck.Ladder(game.adapter)
         self._climbed = 0  # the highest ladder level reached in the current session
-        self._maps = self._visited_maps()  # milestone state; _seen: badges and Pokédex count
         self._baseline()
         self.number: int | None = None  # the current session
         server.after_action, server.recover = self._after_action, self.recover
@@ -567,19 +585,26 @@ class Runner:
         return climbed, notice
 
     def _baseline(self) -> None:
-        """The badges and Pokédex count of the loaded game, read before its first action."""
+        """Milestone state before the next action: maps visited and items had on this timeline, and the loaded game's
+        badges, Pokédex count and bag."""
         state = self.game.progress_state()
         self._seen = {"badges": state["badges"], "dex_owned": state["dex_owned"]} if state["in_game"] else None
+        self._maps = self._reached("map", "map_id")
+        # items already had: obtained earlier on this timeline, or in the bag of the loaded game
+        self._items = self._reached("item", "item") | ({b["item"] for b in state["bag"]} if state["in_game"] else set())
 
     def _milestones(self, state: dict) -> bool:
-        """Record first visits to maps, new badges and new Pokédex entries as milestone events of the timeline.
-        Returns whether a badge was earned."""
+        """Record first visits to maps, new badges, new Pokédex entries and items obtained for the first time as
+        milestone events of the timeline. Returns whether a badge was earned."""
         found = []
         if state["map_id"] not in self._maps:
             self._maps.add(state["map_id"])
             found.append({"kind": "map", "map_id": state["map_id"], "text": f"first visit to {state['map']}"})
         seen = {"badges": state["badges"], "dex_owned": state["dex_owned"]}
-        if self._seen is not None:
+        bag = dict.fromkeys(b["item"] for b in state["bag"])
+        if self._seen is None:  # the first state in game, after a title screen: what the save already had
+            self._items.update(bag)
+        else:
             if seen["badges"] > self._seen["badges"]:
                 found.append({"kind": "badge", "badges": seen["badges"], "text": f"badge {seen['badges']}"})
             if seen["dex_owned"] > self._seen["dex_owned"]:
@@ -587,6 +612,10 @@ class Runner:
                     {"kind": "species", "owned": seen["dex_owned"], "text": f"{seen['dex_owned']} species owned"}
                 )
         self._seen = seen
+        for item in bag:
+            if item not in self._items:
+                self._items.add(item)
+                found.append({"kind": "item", "item": item, "text": f"got {item}"})
         for milestone in found:
             self.memory.event("milestone", milestone, self.number)
             self.log("milestone", milestone["text"])
@@ -594,12 +623,13 @@ class Runner:
             self.show(f"session {self.number} (play)")
         return any(m["kind"] == "badge" for m in found)
 
-    def _visited_maps(self) -> set[int]:
+    def _reached(self, kind: str, key: str) -> set:
+        """The `key` values of this timeline's milestones of `kind` (maps visited, items obtained)."""
         history = self.memory.history()
         return {
-            e["data"]["map_id"]
+            e["data"][key]
             for e in self.memory.events("milestone", limit=-1)
-            if e["data"]["kind"] == "map" and e["created"] <= history.get(e["timeline"], -1)
+            if e["data"]["kind"] == kind and e["created"] <= history.get(e["timeline"], -1)
         }
 
     def _restore_progress(self) -> bool:
@@ -616,7 +646,6 @@ class Runner:
             return False
         data = restore(self.run_dir, self.memory, target["data"]["file"])
         self.game.load_state((self.run_dir / "recovery.state").read_bytes())
-        self._maps = self._visited_maps()
         self._baseline()
         self.server.must_reflect = False  # the restored timeline starts a fresh ladder
         self.log("restore", f"{data['file']} (stuck level 4): {data['undone_actions']} actions undone")
@@ -639,7 +668,7 @@ class Runner:
     def brief(self, number: int, progress: dict) -> str:
         notes = self.run_dir / "notes.md"
         observations = self.game.observations()
-        lines = [f"Objective: {self.meta['objective']}", *self._checks(observations), ""]
+        lines = [f"Game: {self.meta['game']}", f"Objective: {self.meta['objective']}", *self._checks(observations), ""]
         state = self.game.progress_state()
         party = state["party"] if state["in_game"] else []
         if style := style_text(self.meta, party, self.game.adapter.GLITCHES):
@@ -687,6 +716,10 @@ class Runner:
             f"Last session's summary: {progress.get('summary') or 'none, this is the first session.'}",
             f"Planned focus: {progress.get('next_focus') or 'none'}",
             "",
+            "Current game state, read from the game's memory just now (where your notes, plan or knowledge disagree"
+            " with it, the game is right):",
+            self.game.state_text(),
+            "",
             "Your notes:",
             (notes.read_text() if notes.exists() else "") or "(empty)",
         ]
@@ -698,7 +731,7 @@ class Runner:
         if found := self.game.registry.active():
             lines += ["", "Your observations, macros and tools:"]
             lines += [capabilities.summary(self.game.registry, c) for c in found]
-        return "\n".join([*lines, "", "Current game state:", self.game.state_text()])
+        return "\n".join(lines)
 
     def _checks(self, observations: dict) -> list[str]:
         in_game = observations["in_game"]

@@ -366,17 +366,34 @@ class Memory:
         match = " OR ".join(f'"{w}"' for w in words)
         scopes = list(self.scopes.values())
         rows = self.rows(
-            "SELECT k.* FROM knowledge_fts JOIN knowledge k ON k.id = knowledge_fts.rowid"
+            "SELECT k.*, r.rom_sha1 AS source_rom FROM knowledge_fts JOIN knowledge k ON k.id = knowledge_fts.rowid"
+            " LEFT JOIN runs r ON r.id = k.run"
             f" WHERE knowledge_fts MATCH ? AND k.scope IN ({','.join('?' * len(scopes))})"
             " AND k.status != 'refuted' AND k.superseded_by IS NULL ORDER BY bm25(knowledge_fts) LIMIT ?",
             match,
             *scopes,
             limit,
         )
-        return [dict(row) for row in rows]
+        own = self.scopes["rom"].removeprefix("rom:")
+        found = [dict(row) for row in rows]
+        for entry in found:  # family and general knowledge may come from another game of the family
+            if (source := entry.pop("source_rom")) and source != own:
+                entry["learned_in"] = rom_title(source)
+        return found
+
+
+def rom_title(sha1: str) -> str:
+    """A supported dump's title, or "another game" for a ROM no adapter lists by sha1 (a hack)."""
+    from pokeagent.games import ADAPTERS  # here, not at the top: the adapters are only needed for this name
+
+    return next((a.ROMS[sha1] for a in ADAPTERS if sha1 in a.ROMS), "another game")
 
 
 def describe_knowledge(entry: dict) -> str:
     scope = entry["scope"].split(":")[0]
     source = f", from {entry['url']}" if entry["url"] else ""
-    return f"#{entry['id']} [{entry['kind']}, {entry['status']}, {scope}{source}] {entry['topic']}: {entry['content']}"
+    learned = f", learned in {entry['learned_in']}" if entry.get("learned_in") else ""
+    return (
+        f"#{entry['id']} [{entry['kind']}, {entry['status']}, {scope}{source}{learned}] {entry['topic']}:"
+        f" {entry['content']}"
+    )

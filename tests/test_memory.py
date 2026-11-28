@@ -5,7 +5,8 @@ import time
 import pytest
 
 from pokeagent import objectives
-from pokeagent.memory import Memory
+from pokeagent.games.pokemon_gen1 import ROMS
+from pokeagent.memory import Memory, describe_knowledge
 
 META = {
     "objective": "finish the game",
@@ -90,6 +91,15 @@ def test_an_approved_check_becomes_authoritative(tmp_path):
     assert objectives.judge(memory, {"in_game": True, "badges": 1, "map_id": 0}) == "complete"
 
 
+def test_knowledge_from_another_game_names_that_game(tmp_path):
+    (red_sha1, red), (blue_sha1, _) = list(ROMS.items())[:2]
+    first = open_memory(tmp_path, rom_sha1=red_sha1)
+    first.add_knowledge("strategy", "Forest bugs", "Caterpie is weak to fire", scope="family")
+    assert "learned in" not in describe_knowledge(first.search("forest")[0])  # its own game
+    other = open_memory(tmp_path, run="run-2", rom_sha1=blue_sha1)
+    assert f"family, learned in {red}] Forest bugs" in describe_knowledge(other.search("forest")[0])
+
+
 def test_knowledge_scopes_evidence_and_search(tmp_path):
     red = open_memory(tmp_path)
     action = red.event("action", {"name": "walk"})
@@ -123,6 +133,7 @@ def test_knowledge_scopes_evidence_and_search(tmp_path):
 
     blue = open_memory(tmp_path, run="run-2", rom_sha1="blue")  # same family, other ROM, other run
     assert {e["id"] for e in blue.search(query, 10)} == {family, general}
+    assert {e["learned_in"] for e in blue.search(query, 10)} == {"another game"}  # "red" is no supported dump
     with pytest.raises(ValueError, match="not an action"):  # evidence must come from the run's own game
         blue.set_knowledge_status(general, "confirmed", evidence=action)
     with pytest.raises(ValueError, match="unknown"):

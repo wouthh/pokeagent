@@ -29,6 +29,7 @@ from pokeagent.play import (
     restore,
     run_lock,
     style_text,
+    what_changed,
 )
 from pokeagent.server import GameServer
 from pokeagent.validation import validate
@@ -44,7 +45,12 @@ class FakeGame:
 
     def progress_state(self):
         place = {"in_game": self.in_game, "map_id": self.map_id, "map": "Pallet Town", "x": self.x, "y": 0}
-        return place | {"badges": self.badges, "dex_owned": 0, "party": [{"level": 5, "exp": self.exp}]}
+        return place | {
+            "badges": self.badges,
+            "dex_owned": 0,
+            "party": [{"level": 5, "exp": self.exp}],
+            "bag": self.bag,
+        }
 
     def load_state(self, state):
         self.loaded = state
@@ -58,6 +64,7 @@ class FakeGame:
     def __init__(self, map_id=0, in_game=True):
         self.map_id, self.in_game, self.saves, self.restarts = map_id, in_game, 0, []
         self.x = self.badges = self.exp = 0
+        self.bag = [{"item": "POTION", "qty": 1}]
 
     def save_state(self):
         self.saves += 1
@@ -73,6 +80,7 @@ def make_runner(tmp_path, results, objective=None, map_id=0, in_game=True, style
     run_dir = tmp_path / "run"
     run_dir.mkdir(parents=True)
     meta = {
+        "game": "Pokémon Red (English)",
         "objective": objective or "finish the game",
         "check": None if objective else DEFAULT_CHECK,
         "rom_sha1": "red",
@@ -109,7 +117,9 @@ def test_sessions_carry_the_summary_and_checkpoint(tmp_path):
         tmp_path, [(SessionResult("completed"), "found the lab"), (SessionResult("max_turns"), None)]
     )
     assert runner.loop("http://127.0.0.1:1/mcp", max_sessions=2) == "max_sessions"
-    assert "none, this is the first session" in briefs[0] and "on map 0" in briefs[0]
+    assert briefs[0].startswith("Game: Pokémon Red (English)\nObjective: finish the game")
+    assert "none, this is the first session" in briefs[0]
+    assert briefs[0].index("the game is right):\non map 0") < briefs[0].index("Your notes:")  # the game before notes
     assert "found the lab" in briefs[1] and "the next thing" in briefs[1]
     assert json.loads((runner.run_dir / "state.json").read_text())["sessions"] == 2
     assert len(list((runner.run_dir / "checkpoints").glob("*.state"))) == 2
@@ -280,6 +290,11 @@ def test_milestones_and_a_stuck_run_that_restores_then_pauses(tmp_path):
         if session.number == 1:
             game.map_id = 1  # a first visit
             runner._after_action()
+            game.bag = [{"item": "POTION", "qty": 2}, {"item": "OAK's PARCEL", "qty": 1}]  # had a POTION already
+            runner._after_action()
+            game.bag = [{"item": "POTION", "qty": 2}]
+            runner._after_action()
+            game.bag = [{"item": "POTION", "qty": 2}, {"item": "OAK's PARCEL", "qty": 1}]  # not a first time
             game.badges = 1
             runner._after_action()
         actions = 0
@@ -295,10 +310,12 @@ def test_milestones_and_a_stuck_run_that_restores_then_pauses(tmp_path):
     runner.provider = acting
     assert runner.loop("url") == "stuck"
     milestones = [e["data"]["text"] for e in runner.memory.events("milestone", limit=-1)]
-    assert milestones[-2:] == ["first visit to Pallet Town", "badge 1"]
+    assert milestones[-3:] == ["first visit to Pallet Town", "got OAK's PARCEL", "badge 1"]
     assert "badge 1" in [e["data"]["reason"] for e in runner.memory.events("checkpoint", limit=-1)]
     assert [int(n.split("stuck level ")[1][0]) for n in notices] == [1, 2, 3, 4, 5]
-    assert "Recent milestones: first visit to Pallet Town (session 1); badge 1 (session 1)" in briefs[1]
+    assert (
+        "Recent milestones: first visit to Pallet Town (session 1); got OAK's PARCEL (session 1); badge 1" in briefs[1]
+    )
     assert "Stuck: no progress in your last 120 actions; the stuck ladder is at level 3 of 5" in briefs[1]
     restored = runner.memory.events("restore")[0]["data"]
     assert restored["undone_actions"] == 0 and game.loaded  # actions events come from the server, not this fake
@@ -673,6 +690,17 @@ def test_the_brief_carries_the_play_style_and_team_facts(tmp_path):
     )
     direct = {"variety": None, "glitches": False}
     assert style_text(direct, party, "Glitches: allowed") == []  # the objective by its own route
+
+
+def test_action_results_name_items_and_pokemon_that_came_or_went():
+    pidgey, nile = {"name": "PIDGEY", "species": "PIDGEY"}, {"name": "NILE", "species": "SQUIRTLE"}
+    before = {"bag": [{"item": "POTION", "qty": 2}, {"item": "ANTIDOTE", "qty": 1}], "party": [nile]}
+    after = {"bag": [{"item": "POTION", "qty": 1}, {"item": "POKé BALL", "qty": 5}], "party": [nile, pidgey]}
+    assert what_changed(before, after) == [
+        "Bag: +POKé BALL x5, -POTION x1, -ANTIDOTE x1 (none left)",
+        "Party: +PIDGEY (PIDGEY)",
+    ]
+    assert what_changed(after, after) == []
 
 
 def test_a_run_can_start_from_another_runs_game(rom_path, tmp_path):
