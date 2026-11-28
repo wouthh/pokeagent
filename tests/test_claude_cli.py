@@ -1,4 +1,5 @@
 import json
+import shlex
 import sys
 import time
 from pathlib import Path
@@ -34,9 +35,9 @@ RESULT = {
 
 
 def fake_claude(tmp_path: Path, events: list[dict], *, sleep: float = 0, auth: dict | None = None) -> str:
-    """A stand-in `claude` that records its argv, environment and MCP config mode, then prints `events`."""
-    script = tmp_path / "claude"
-    script.write_text(f"""#!{sys.executable}
+    """A stand-in `claude` that records its argv, environment and MCP config mode, then prints `events`. A shell
+    wrapper starts it: a shebang cannot hold an interpreter path with spaces (a checkout in "Coding projects")."""
+    (tmp_path / "claude.py").write_text(f"""
 import json, os, stat, sys, time
 argv = sys.argv[1:]
 if argv[:2] == ["auth", "status"]:
@@ -51,6 +52,10 @@ for event in {events!r}:
     print(json.dumps(event), flush=True)
 time.sleep({sleep})
 """)
+    script = tmp_path / "claude"
+    script.write_text(
+        f'#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(str(tmp_path / "claude.py"))} "$@"\n'
+    )
     script.chmod(0o755)
     return str(script)
 
