@@ -51,4 +51,12 @@ def test_the_enemys_next_pokemon_counts_and_the_battle_memory_resets():
     assert ladder.observe(fight(50, pos=1), 1) == 0 and ladder.since == 0
     ladder.observe(state(), 1)  # the battle ended
     assert ladder.foe is None
-    assert ladder.observe(fight(90, pos=1), 1) == 0 and ladder.since == 0  # a new battle starts from scratch
+    ladder.observe(fight(90, pos=1), 1)
+    assert ladder.foe == (1, 90) and ladder.since == 2  # a new battle starts from scratch; meeting it is not progress
+
+
+def test_meeting_wild_pokemon_and_fleeing_is_not_progress():
+    ladder = Ladder(Gen1)
+    ladder.observe(state(), 1)
+    climbs = [ladder.observe(fight(40) if i % 2 else state(), 1) for i in range(STEP)]
+    assert climbs[-1] == 1 and ladder.level == 1

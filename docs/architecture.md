@@ -130,8 +130,8 @@ action and the status panel; on by default) and `--watch-speed` (a multiple of r
 - **Progress** is `progress_score` rising above its best: badges, maps visited on this timeline, Pokédex entries,
   levels, experience and tiles visited (since the runner started). Grinding on the same tiles is progress; pacing
   them or bumping into a wall is not. In a battle, the enemy's HP falling below its lowest so far in that battle
-  (damage dealt, however it is dealt) and its next party member coming out count too; healing back up, or both
-  sides healing, does not. The ladder keeps that battle memory and drops it when the battle ends.
+  (damage dealt, however it is dealt) and its next party member coming out count too; meeting a foe, healing back
+  up, or both sides healing, does not. The ladder keeps that battle memory and drops it when the battle ends.
 - **The ladder** (`stuck.py`, held by the runner): every 40 completed actions without progress climb a level, and a
   climb adds a notice (with knowledge hits for the current map) to that action's result and a `stuck` event:
   1. the notice only;
