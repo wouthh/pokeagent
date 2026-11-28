@@ -55,6 +55,7 @@ Thin interfaces exist only at these seams, each with one implementation for now:
   - `info`, `run(buttons, frames)` (hold, then release), `frame` (RGB bytes);
   - `read(addr, n)`: non-const memory-map regions only, so ROM is refused;
   - `ram_hash`: sha256 of system RAM plus save RAM;
+  - `save_ram`: the cartridge's battery RAM, read-only (what a `.sav` file holds);
   - `save_state` / `load_state`.
 - There is no write operation.
 - Checkpoints and timelines live in the run directory and the memory store (phases 4–5). Running the same inputs
@@ -84,8 +85,8 @@ text is stored in the repository; `gen1_map_names.txt` holds only the map consta
 ## Play loop *(implemented, phase 4)*
 
 `pokeagent play --rom PATH [--objective TEXT]` creates a run; `pokeagent resume RUN` continues one where it stopped.
-Both take `--max-sessions`, `--model`, `--effort`, `--watch` (Tk window with the frame and the last
-action) and `--watch-speed` (a multiple of real time; uncapped by default).
+Both take `--max-sessions`, `--model`, `--effort`, `--watch`/`--no-watch` (the Tk window with the frame, the last
+action and the status panel; on by default) and `--watch-speed` (a multiple of real time; uncapped by default).
 
 - **Run directory** (`<data dir>/runs/<id>/`, mode 0700): `run.json` (objective, trusted check, ROM path and
   sha1, core and options; written once), `state.json` (session count, last summary and focus), `notes.md`,
@@ -146,8 +147,11 @@ action) and `--watch-speed` (a multiple of real time; uncapped by default).
 
 - `pokeagent status RUN`: state, objective and checks, play and develop sessions with actions, tokens and cost, the
   timeline, the planned focus, the last five milestones, the last stuck notice, the active capabilities (newest
-  first), recent knowledge and the last development cycle. The `--watch` window shows the same text in a panel
+  first), recent knowledge and the last development cycle. The game window shows the same text in a panel
   under the frame, refreshed at session starts and ends, milestones and stuck notices.
+- `pokeagent view RUN [CHECKPOINT]`: the game window with the latest state (or a checkpoint of the current timeline)
+  and the status panel, without playing. `pokeagent export-sav RUN [CHECKPOINT] [--out PATH] [--force]`: the game
+  saved in game as a standard `.sav` (see Decisions).
 - `pokeagent stats RUN`: one row per session (mode, end, turns, actions, capability calls and failures, milestones,
   tokens, cache reads, cost, minutes), totals per mode and the development share of tokens. A session without its end event shows as
   `running` while a pokeagent process holds the run's lock, else as `interrupted`.
@@ -382,6 +386,10 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
 - A serialized state carries the whole 32 KB cartridge RAM. After an in-game save, loading the earlier state also
   restores the earlier save data, so checkpoints need no separate `.sav` and an in-game save cannot leak between
   timelines.
+- The same 32 KB (libretro's `RETRO_MEMORY_SAVE_RAM`, all four banks) is what a standard Red/Blue `.sav` holds. After
+  an in-game save the player name sits at file offset 0x2598 and the main data checksum (`~sum` of 0x2598-0x3522) at
+  0x3523, as in pret's `sPlayerName` and `sMainDataCheckSum`; a test saves in game and checks both. An exported save
+  loaded in PyBoy offered CONTINUE with the same player, badges, map and position.
 
 **Pokémon Red/Blue (English)**
 
@@ -528,6 +536,13 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
   `RLIMIT_NPROC` counts the user's whole process tree.
 - **2026-11-27: No separate battery save files.** SameBoy's serialized state includes the cartridge RAM, so a
   checkpoint restores the in-game save with everything else and saves cannot cross timelines.
+- **2026-11-28: `.sav` files only on request, saved in game.** `pokeagent export-sav` loads a copy of the latest state
+  (or a checkpoint) in a fresh emulator, closes text, backs out of menus with B (never answering a yes/no prompt) and
+  saves through the START menu, then writes the cartridge RAM once the game's own checksum holds. Copying the RAM
+  without saving would export whatever the agent last saved, possibly nothing. The run is never changed, and an
+  existing file is replaced only with `--force`. The worker's `save_ram` op is read-only like `read`.
+- **2026-11-28: The game window is on by default.** A run is meant to be watched; `--no-watch` is for tests and
+  headless machines. `pokeagent view` shows a stopped run's game and status without playing it.
 - **2026-11-27: Game names come from the user's ROM at runtime,** not from tables in the repository, and the walk grid
   is computed from the map and tileset data in RAM and ROM instead of hand-written maps.
 - **2026-11-27: Timeline-bound context is saved with each checkpoint.** `notes.md` and `state.json` are copied next to

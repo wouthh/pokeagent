@@ -46,3 +46,10 @@ def test_capability_list_and_rollback(tmp_path, capsys):
     assert cli.main(["capability", "rollback", "r1", "spin", *dirs]) == 0
     assert "spin version 2 was rolled back (by the user); version 1 is active again" in capsys.readouterr().out
     assert cli.main(["capability", "rollback", "r1", "fly", *dirs]) == 1
+
+
+def test_the_game_window_is_on_unless_turned_off():
+    parser = cli.build_parser()
+    assert parser.parse_args(["play", "--rom", "r.gb"]).watch
+    assert not parser.parse_args(["play", "--rom", "r.gb", "--no-watch"]).watch
+    assert not parser.parse_args(["resume", "r1", "--no-watch"]).watch

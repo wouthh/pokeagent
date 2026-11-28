@@ -18,11 +18,12 @@ class Viewer:
         self.status = ""
         self.panel = ""
         self._error: Exception | None = None
+        self.closed = threading.Event()  # set once the window is gone
         ready = threading.Event()
         threading.Thread(target=self._run, args=(scale, ready), daemon=True).start()
         ready.wait()
         if self._error:
-            raise RuntimeError(f"cannot open the viewer window: {self._error}")
+            raise RuntimeError(f"cannot open the game window ({self._error}); --no-watch plays without one")
 
     def _run(self, scale: int, ready: threading.Event) -> None:
         signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
@@ -30,6 +31,7 @@ class Viewer:
             root = tkinter.Tk()
         except tkinter.TclError as e:
             self._error = e
+            self.closed.set()
             ready.set()
             return
         ready.set()
@@ -58,4 +60,7 @@ class Viewer:
             root.after(33, tick)
 
         tick()
-        root.mainloop()
+        try:
+            root.mainloop()
+        finally:
+            self.closed.set()

@@ -86,6 +86,10 @@ class Emulator:
         """sha256 of system RAM plus all of save RAM (every bank), e.g. to check that a state restores the save."""
         return self._call("ram_hash")[0]["sha256"]
 
+    def save_ram(self) -> bytes:
+        """The cartridge's battery RAM (all banks), read-only: the contents of a standard .sav file."""
+        return self._call("save_ram")[1]
+
     def save_state(self) -> bytes:
         return self._call("save_state")[1]
 

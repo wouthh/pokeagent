@@ -33,7 +33,12 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--max-sessions", type=int, help="stop after this many sessions (default: no limit)")
         p.add_argument("--model", help="Claude model for the sessions (default: the CLI's default)")
         p.add_argument("--effort", help="reasoning effort for the sessions")
-        p.add_argument("--watch", action="store_true", help="show the game in a window")
+        p.add_argument(
+            "--watch",
+            action=argparse.BooleanOptionalAction,
+            default=True,
+            help="show the game in a window (default); --no-watch plays without one",
+        )
         p.add_argument("--watch-speed", type=float, help="emulation speed, a multiple of real time (default: uncapped)")
         p.add_argument("--dev-share", type=float, default=0.3, help="most of the run's tokens development may use")
         p.add_argument("--dev-attempts", type=int, default=2, help="development sessions per tool")
@@ -53,6 +58,16 @@ def build_parser() -> argparse.ArgumentParser:
     capability.add_argument("run", help="run id or run folder")
     capability.add_argument("name", nargs="?", help="for rollback: the capability to take back to its previous version")
     capability.add_argument("--data-dir", type=Path, help="where runs live (default ~/.local/share/pokeagent)")
+    view = commands.add_parser("view", help="show a run's game in a window without playing it")
+    view.add_argument("run", help="run id or run folder")
+    view.add_argument("checkpoint", nargs="?", help="checkpoint file name (default: the latest state)")
+    view.add_argument("--data-dir", type=Path, help="where runs live (default ~/.local/share/pokeagent)")
+    export = commands.add_parser("export-sav", help="save a run's game in game and write it as a .sav file")
+    export.add_argument("run", help="run id or run folder")
+    export.add_argument("checkpoint", nargs="?", help="checkpoint file name (default: the newest state it can save)")
+    export.add_argument("--out", type=Path, help="where to write it (default: <ROM name>.sav in the run folder)")
+    export.add_argument("--force", action="store_true", help="replace --out if it exists")
+    export.add_argument("--data-dir", type=Path, help="where runs live (default ~/.local/share/pokeagent)")
     status = commands.add_parser("status", help="where a run stands")
     stats = commands.add_parser("stats", help="per-session metrics of a run, optionally compared with another")
     stats.add_argument("--compare", metavar="RUN", help="another run of the same data dir, compared at milestones")
@@ -169,6 +184,21 @@ def main(argv: list[str] | None = None) -> int:
             print(f"pokeagent: {e}", file=sys.stderr)
             return 1
         print(f"run {run_dir.name} stopped: {reason}")
+    elif args.command in ("view", "export-sav"):
+        from pokeagent import play
+
+        try:
+            run_dir, data_dir = find_run(args.run, args.data_dir)
+            if args.command == "view":
+                play.view(run_dir, data_dir, args.checkpoint)
+            else:
+                rom = Path(json.loads((run_dir / "run.json").read_text())["rom"])
+                out = args.out or run_dir / f"{rom.stem}.sav"
+                used = play.export_save(run_dir, data_dir, out, args.checkpoint, args.force)
+                print(f"saved in game at {used}; wrote {out}")
+        except (OSError, ValueError, RuntimeError) as e:  # includes SandboxError and EmulatorError
+            print(f"pokeagent: {e}", file=sys.stderr)
+            return 1
     elif args.command in ("status", "stats"):
         from pokeagent import play, stats
 

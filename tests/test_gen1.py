@@ -129,6 +129,26 @@ def test_state_restores_the_in_game_save(game):
     assert emu.ram_hash() == before
 
 
+def test_save_game_writes_a_standard_save_file(game):
+    """Saving through the START menu fills the cartridge RAM other emulators load as a .sav: the player's name and a
+    checksum the game itself checks before it offers CONTINUE."""
+    gen1, emu, bedroom = game
+    emu.load_state(bedroom)
+    assert not gen1.save_complete(emu.save_ram())  # never saved
+    assert gen1.save_game(emu)
+    sram = emu.save_ram()
+    assert len(sram) == 0x8000 and gen1.save_complete(sram)
+    assert decode(sram[0x2598:0x25A3]) == gen1.state(emu)["player_name"]
+    assert gen1.save_game(emu)  # a second save also confirms erasing the older file
+    assert not gen1.save_complete(sram[:0x3000] + bytes([sram[0x3000] ^ 1]) + sram[0x3001:])
+    gen1.press(emu, "start", wait=30)
+    assert gen1.choose(emu, "SAVE")
+    assert not gen1.save_game(emu)  # at a yes/no prompt, which it never answers
+    emu.load_state(bedroom)
+    gen1.press(emu, "start", wait=30)
+    assert gen1.save_game(emu)  # backs out of an open menu first
+
+
 def test_power_on_is_not_a_game_in_progress(rom_path):
     gen1 = Gen1(rom_path.read_bytes())
     with Emulator(core_path("sameboy"), rom_path, options=CORE_OPTIONS) as emu:

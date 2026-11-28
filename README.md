@@ -56,34 +56,45 @@ user namespaces are disabled), pokeagent refuses to start rather than running un
 2. Start a short run you can watch:
 
    ```sh
-   uv run pokeagent play --rom /path/to/your/red.gb --watch --max-sessions 1
+   uv run pokeagent play --rom /path/to/your/red.gb --max-sessions 1
    ```
 
    A session is one `claude -p` conversation of at most 100 game actions. In the live checks so far a session took
    3 to 7 minutes and cost $1 to $2 of Claude usage (reported per session in `play.log` and by `pokeagent stats`).
    `--model` and `--effort` choose the Claude model and reasoning effort.
-3. Watch it: the window shows the game, the last action and a panel with the run's status. `play.log` in the run
-   folder has every message, tool call and session summary (`tail -f` it), and `notes.md` the agent's own notes.
-4. Continue with `uv run pokeagent resume <run id> --watch`. Without `--max-sessions` it plays until the objective
+3. Watch it: a window opens with the game as it plays, the last action and a panel with the run's status
+   (`--no-watch` plays without it). `play.log` in the run folder has every message, tool call and session summary
+   (`tail -f` it), and `notes.md` the agent's own notes.
+4. Continue with `uv run pokeagent resume <run id>`. Without `--max-sessions` it plays until the objective
    is met, the run pauses for you, or you press Ctrl-C (which saves a checkpoint first). When usage limits are hit,
    it waits for the reset.
 5. Look at what it did: `pokeagent status <run id>`, `pokeagent stats <run id>` and `pokeagent capability list
-   <run id>`. Problems the agent finds in pokeagent itself go to `~/.local/share/pokeagent/harness-issues.md`.
+   <run id>`. `pokeagent view <run id>` shows the game where it stopped, and `pokeagent export-sav <run id>` writes
+   it as an ordinary `.sav` to load in any Game Boy emulator (see below). Problems the agent finds in pokeagent itself go to `~/.local/share/pokeagent/harness-issues.md`.
 
 ## Playing
 
 ```sh
-uv run pokeagent play --rom /path/to/your/red.gb --watch      # new run towards the default objective
+uv run pokeagent play --rom /path/to/your/red.gb              # new run towards the default objective
 uv run pokeagent play --rom /path/to/your/red.gb --objective "Get the first badge" \
   --success '{"obs": "badges", "op": ">=", "value": 1}'           # your own check completes the run
-uv run pokeagent resume 20261127-170000 --watch               # continue a run where it stopped
+uv run pokeagent resume 20261127-170000                       # continue a run where it stopped
 uv run pokeagent restore 20261127-170000                      # list the checkpoints a stopped run can go back to
 uv run pokeagent restore 20261127-170000 1764263000000000000.state  # go back; learned knowledge stays
 uv run pokeagent status 20261127-170000                       # where a run stands
+uv run pokeagent view 20261127-170000                         # show the game where it stopped (or at a checkpoint)
+uv run pokeagent export-sav 20261127-170000                   # write it as a .sav for other emulators
 uv run pokeagent stats 20261127-170000 --compare 20261201-090000  # per-session metrics, compared at milestones
 uv run pokeagent capability list 20261127-170000              # the observations, macros and tools it defined
 uv run pokeagent capability rollback 20261127-170000 heal     # take one back to its previous version
 ```
+
+`export-sav` saves the game the way a player would, on a copy, so the run itself is not touched: it closes open
+text, backs out of menus with B and saves through the START menu. It uses the newest state that allows that (not one
+in a battle or at a yes/no prompt), says which, and writes the cartridge's 32 KB battery RAM, the standard `.sav`
+format that other emulators (mGBA, SameBoy, BGB, PyBoy and others) load next to the ROM. It goes to
+`<ROM name>.sav` in the run folder unless you pass `--out`, and never replaces a file without `--force`. Give a
+checkpoint name (from `pokeagent restore <run id>`) to export or view that one instead.
 
 When a problem keeps costing actions, the agent may ask for a development session, which writes and validates a
 code tool away from the live game. `--dev-share` (default 0.3 of the run's tokens), `--dev-attempts` (2 per tool),
@@ -91,7 +102,7 @@ code tool away from the live game. `--dev-share` (default 0.3 of the run's token
 one always runs.
 
 Each run lives in `~/.local/share/pokeagent/runs/<id>/`: `play.log` shows every message and action, `notes.md` the
-agent's own notes. Ctrl-C stops a run after saving a checkpoint; closing the `--watch` window only stops watching.
+agent's own notes. Ctrl-C stops a run after saving a checkpoint; closing the game window only stops watching.
 When the agent makes no progress for many actions, pokeagent escalates from notices to a pause for reflection, a new
 session, a restore of the last checkpoint after its progress and finally stops the run as `stuck`; `resume`
 continues it.
