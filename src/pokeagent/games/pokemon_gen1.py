@@ -279,8 +279,9 @@ def layout_problems(read, layout: dict[str, int], banks: int = 64) -> list[str]:
 
 class Gen1:
     """Reads state and drives inputs for one English Red, Blue or Yellow ROM (or a hack of their engine) inside an
-    `Emulator`. The version comes from the ROM itself: its tables are scanned for, Yellow is told by its header title,
-    and the first state read of a running game checks the WRAM layout against the game's own invariants."""
+    `Emulator`. The version comes from the ROM itself: its tables are scanned for, Yellow is told by its
+    header title or colour flag, and the first state read of a running game checks the WRAM layout against the
+    game's own invariants."""
 
     ROMS, FAMILY, CORE, CORE_OPTIONS = ROMS, FAMILY, CORE, CORE_OPTIONS
     DEFAULT_OBJECTIVE, DEFAULT_CHECK, OBSERVATIONS = DEFAULT_OBJECTIVE, DEFAULT_CHECK, OBSERVATIONS
@@ -299,7 +300,7 @@ class Gen1:
         header = rom[0x134:0x144].split(b"\0")[0].decode("ascii", "replace")
         self.title = ROMS.get(hashlib.sha1(rom).hexdigest()) or f"Gen 1 ROM hack (header title {header})"
         self.rom = rom
-        self.yellow = "YELLOW" in header
+        self.yellow = "YELLOW" in header or bool(rom[0x143] & 0x80)  # Yellow is colour-flagged; hacks keep that
         self.layout = "yellow" if self.yellow else "red-blue"
         self.ram = SimpleNamespace(**RAM_LAYOUTS[self.layout])
         self.layout_checked = False  # set once a running game has confirmed (or replaced) the layout
