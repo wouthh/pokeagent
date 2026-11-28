@@ -23,6 +23,35 @@ HALL_OF_FAME = 0x76
 DEFAULT_OBJECTIVE = "Finish the game: defeat the Elite Four and the Champion and enter the Hall of Fame."
 DEFAULT_CHECK = {"obs": "map_id", "op": "==", "value": HALL_OF_FAME}
 MAP_NAMES = Path(__file__).with_name("gen1_map_names.txt").read_text().splitlines()
+# Per-run variety for the natural play style: the starters (species index: type ids), the type ids a team can
+# draw (all but BIRD and the unused ids) and optional side quests.
+STARTERS = {0x99: (0x16, 0x03), 0xB0: (0x14,), 0xB1: (0x15,)}
+TEAM_TYPES = (0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x07, 0x08, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A)
+SIDE_QUESTS = (
+    "Buy the Magikarp the salesman offers in the Mt. Moon Pokémon Center and raise it into a Gyarados.",
+    "Get the Coin Case in Celadon City and win a Pokémon prize at the Game Corner.",
+    "Catch a Safari Zone Pokémon that lives nowhere else, such as Chansey, Kangaskhan or Tauros.",
+    "Make at least two of the trades that people in towns offer.",
+    "Collect the Old Rod, the Good Rod and the Super Rod, and catch a Pokémon with each.",
+    "Revive a fossil at the Cinnabar Island lab.",
+    "Receive the gift Eevee in Celadon Mansion and evolve it with a stone of your choice.",
+    "Receive the gift Lapras at Silph Co.",
+    "Catch one of the legendary birds: Articuno, Zapdos or Moltres.",
+    "Win Hitmonlee or Hitmonchan at the fighting dojo in Saffron City.",
+    "Leave a Pokémon at the Route 5 Day Care for a while and collect it again.",
+    "Show Professor Oak's aides enough caught species to receive HM05 Flash, the Itemfinder and the Exp. All.",
+    "Catch a Snorlax instead of defeating it.",
+    "Battle every trainer on the routes you cross.",
+    "Catch a Pokémon of every type.",
+    "Catch a Pikachu.",
+    "Get the Bicycle and ride down Cycling Road.",
+)
+GLITCHES = (
+    "Glitches: allowed in this run. Known glitches of this game done with ordinary controller input are fair play,"
+    " such as the Mew glitch, MissingNo. and item duplication (the old man in Viridian City, then the east coast of"
+    " Cinnabar Island) and arbitrary code execution with the glitch item 8F. Research the exact steps before you try"
+    " one: some corrupt the save, the Hall of Fame or the game, so use them on purpose and record what worked."
+)
 OBSERVATIONS = {  # the values success checks may test, read from the adapter's state
     "map_id": lambda s: s["map_id"],
     "x": lambda s: s["x"],
@@ -55,6 +84,7 @@ TILESET_BANK, TILESET_BLOCKS, TILESET_COLLISION, GRASS_TILE = 0xD52B, 0xD52C, 0x
 # ROM tables (bank, address)
 MONSTER_NAMES, ITEM_NAMES, MOVE_NAMES = (0x07, 0x421E), (0x01, 0x472B), (0x2C, 0x4000)
 TILE_PAIR_COLLISIONS_LAND, LEDGE_TILES = (0x00, 0x0C7E), (0x06, 0x66CF)
+TYPE_NAMES = (0x09, 0x7DAE)  # 0x1B little-endian pointers to names; 9-0x13 are unused (NORMAL)
 
 CHARMAP = {0x50: "", 0x7F: " ", 0xBA: "é", 0xBB: "'d", 0xBC: "'l", 0xBD: "'s", 0xBE: "'t", 0xBF: "'v", 0xE0: "'"}
 CHARMAP |= {0xE1: "PK", 0xE2: "MN", 0xE3: "-", 0xE4: "'r", 0xE5: "'m", 0xE6: "?", 0xE7: "!", 0xE8: ".", 0xEC: "▷"}
@@ -87,6 +117,17 @@ def decode(data: bytes) -> str:
 def bcd(data: bytes) -> int:
     digits = "".join(f"{b:02x}" for b in data)
     return int(digits) if digits.isdigit() else 0  # not BCD: power-on noise before a game is loaded
+
+
+def stat_line(values: list[int], hp: bool = False) -> str:
+    """Atk, Def, Spd, Spc (and HP) values as "Atk 9 Def 12 ...", the order party entries keep them in."""
+    return " ".join(f"{name} {value}" for name, value in zip(("Atk", "Def", "Spd", "Spc", "HP"), values, strict=False))
+
+
+def dvs(first: int, second: int) -> list[int]:
+    """Attack, Defense, Speed, Special and HP DVs (0-15) from the two DV bytes; HP's comes from the others' low bits."""
+    atk, dfn, spd, spc = first >> 4, first & 15, second >> 4, second & 15
+    return [atk, dfn, spd, spc, (atk & 1) << 3 | (dfn & 1) << 2 | (spd & 1) << 1 | spc & 1]
 
 
 @dataclass
@@ -181,6 +222,8 @@ class Gen1:
         self.species = [decode(self._rom(MONSTER_NAMES, 190 * 10)[i * 10 : i * 10 + 10]) for i in range(190)]
         self.items = self._names(ITEM_NAMES, 0x61)
         self.moves = self._names(MOVE_NAMES, 165)
+        pointers = self._rom(TYPE_NAMES, 2 * 0x1B)
+        self.types = [self._names((0x09, pointers[2 * i] | pointers[2 * i + 1] << 8), 1)[0] for i in range(0x1B)]
         pairs = self._table(TILE_PAIR_COLLISIONS_LAND, 3)
         self.tile_pairs = {}
         for tileset, a, b in pairs:
@@ -272,8 +315,14 @@ class Gen1:
                     "hp": int.from_bytes(mon[1:3]),
                     "max_hp": int.from_bytes(mon[34:36]),
                     "status": "asleep" if status & 7 else STATUS.get(status & 0xF8, "ok" if not status else "status"),
+                    "types": list(dict.fromkeys(self.types[t] for t in mon[5:7] if t < len(self.types))),
                     "moves": [self.move_name(mv) for mv in mon[8:12] if mv],
+                    "pp": [(pp & 0x3F, pp >> 6) for mv, pp in zip(mon[8:12], mon[29:33], strict=True) if mv],
                     "exp": int.from_bytes(mon[14:17]),
+                    # Atk, Def, Spd, Spc, then HP for stat exp and DVs (`stat_line` labels them)
+                    "stats": [int.from_bytes(mon[i : i + 2]) for i in (36, 38, 40, 42)],
+                    "stat_exp": [int.from_bytes(mon[i : i + 2]) for i in (19, 21, 23, 25, 17)],
+                    "dvs": dvs(mon[27], mon[28]),
                 }
             )
         bag = []
@@ -388,8 +437,8 @@ class Gen1:
         return {name: read(state) for name, read in OBSERVATIONS.items()}
 
     @staticmethod
-    def state_text(state: dict) -> str:
-        """The state as a few lines for the model."""
+    def state_text(state: dict, detail: bool = False) -> str:
+        """The state as a few lines for the model; `detail` adds each party member's stats, stat exp and DVs."""
         screen = state["screen"]
         flags = [f for f in ("yes_no", "waiting") if screen[f]]
         if not state["in_game"]:
@@ -410,11 +459,17 @@ class Gen1:
             f"{state['badges']}/8, Pokédex owned {state['dex_owned']} seen {state['dex_seen']}.",
         ]
         party = [
-            f"{p['name']} ({p['species']}) L{p['level']} HP {p['hp']}/{p['max_hp']} {p['status']} "
-            f"[{', '.join(p['moves'])}]"
+            f"{p['name']} ({p['species']}, {'/'.join(p['types'])}) L{p['level']} HP {p['hp']}/{p['max_hp']} "
+            f"{p['status']} [{', '.join(Gen1._move_text(*move) for move in zip(p['moves'], p['pp'], strict=True))}]"
             for p in state["party"]
         ]
         lines.append("Party: " + ("; ".join(party) if party else "none"))
+        if detail:
+            lines += [
+                f"  {p['name']}: {stat_line(p['stats'])}; stat exp {stat_line(p['stat_exp'], hp=True)};"
+                f" DVs {stat_line(p['dvs'], hp=True)}"
+                for p in state["party"]
+            ]
         lines.append("Bag: " + (", ".join(f"{b['item']} x{b['qty']}" for b in state["bag"]) or "empty"))
         if battle := state["battle"]:
             lines.append(
@@ -424,6 +479,11 @@ class Gen1:
         if state["screen_text"]:
             lines.append("Screen text:\n" + "\n".join("  " + line for line in state["screen_text"]))
         return "\n".join(lines)
+
+    @staticmethod
+    def _move_text(move: str, pp: tuple[int, int]) -> str:
+        left, ups = pp
+        return f"{move} {left}pp" + (f" ({ups} PP Up{'s' if ups > 1 else ''})" if ups else "")
 
     # ---- macro actions (controller input only) ----
 

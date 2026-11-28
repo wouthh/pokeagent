@@ -130,6 +130,30 @@ When the agent makes no progress for many actions, pokeagent escalates from noti
 session, a restore of the last checkpoint after its progress and finally stops the run as `stuck`; `resume`
 continues it.
 
+### Play style and other objectives
+
+New runs play in the natural style: the agent catches species it does not own yet, builds a balanced team in which
+no two members share a type, trains it evenly, uses its items (TMs, PP Ups, evolution stones), leaves Pokémon in the
+PC when needed, nicknames its team and takes up side quests. Each run draws its own variety once and keeps it in
+`run.json`: the starter the fewest earlier runs had, three team types besides the starter's, a nickname theme and
+three side quests. `--style direct` pursues the objective by the shortest route instead.
+
+`--glitches` (off by default) allows the game's known glitches done with ordinary controller input; on Red/Blue
+the brief names the Mew glitch, MissingNo. and item duplication and arbitrary code execution with item 8F. A
+glitch can reach the Hall of Fame check too, as in a glitched speedrun.
+
+`--from RUN` starts a new run from another run's latest game instead of power-on; that run does not change:
+
+```sh
+uv run pokeagent play --from 20261127-205537 --objective "Train the whole team evenly to level 50"
+uv run pokeagent play --from 20261127-205537 --glitches \
+  --objective "Raise a Tauros with Smogon's RBY OU set: its moves, maximum stat exp and good DVs"
+```
+
+`get_state` shows each party member's stats, stat exp (EVs), DVs (IVs) and the PP Ups on each move, so the agent
+can work on objectives like these. pokeagent cannot check them itself, so the agent reports them complete and you
+confirm. The agent may also suggest objectives of its own for later runs; `pokeagent status` lists them.
+
 The default objective completes when the game reaches the Hall of Fame. A custom objective completes only with your
 `--success` check. Without one, the agent may propose a check or report the objective complete, and the run then
 pauses for you:

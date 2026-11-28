@@ -31,13 +31,27 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
     commands.add_parser("fetch-cores", help="download the pinned libretro cores into the user cache (once)")
     play = commands.add_parser("play", help="start a new run on a ROM")
-    play.add_argument("--rom", type=Path, required=True, help="your own ROM dump (supported games only)")
+    play.add_argument("--rom", type=Path, help="your own ROM dump (supported games only)")
+    play.add_argument(
+        "--from",
+        dest="source",
+        metavar="RUN",
+        help="start from another run's latest game (its ROM; that run does not change) instead of power-on",
+    )
     play.add_argument("--objective", help="what the agent should achieve (default: finish the game)")
     play.add_argument(
         "--success",
         type=json.loads,
         help='your own success check as JSON, e.g. \'{"obs": "badges", "op": ">=", "value": 8}\'',
     )
+    play.add_argument(
+        "--style",
+        choices=("natural", "direct"),
+        default="natural",
+        help="natural (default): catch new species, a varied and evenly trained team, items, nicknames and side"
+        " quests; direct: the objective by the shortest route",
+    )
+    play.add_argument("--glitches", action="store_true", help="allow the game's known glitches (default: off)")
     resume = commands.add_parser("resume", help="continue a run from its latest checkpoint")
     resume.add_argument("run", help="run id (a folder name under <data dir>/runs) or a run folder")
     for p in (play, resume):
@@ -187,8 +201,13 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             if args.command == "play":
-                data_dir = args.data_dir or play.default_data_dir()
-                run_dir = play.new_run(args.rom, args.objective, data_dir, args.success)
+                if bool(args.rom) == bool(args.source):
+                    raise ValueError("give either --rom (a new game) or --from RUN (that run's game)")
+                source, data_dir = find_run(args.source, args.data_dir) if args.source else (None, None)
+                data_dir = args.data_dir or data_dir or play.default_data_dir()
+                run_dir = play.new_run(
+                    args.rom, args.objective, data_dir, args.success, args.style, args.glitches, source
+                )
             else:
                 run_dir, data_dir = find_run(args.run, args.data_dir)
             print(f"run {run_dir.name}: log at {run_dir / 'play.log'}")

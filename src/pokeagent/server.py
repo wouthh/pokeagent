@@ -428,6 +428,17 @@ class GameServer:
             )
 
         @tool
+        def suggest_objective(objective: str, why: str, ctx: Context) -> str:
+            """Suggest an objective for a later run on this game: an idea of your own that would be fun or interesting
+            to play. It never changes this run's objective; the user sees suggestions in `pokeagent status` and may
+            start a run with one."""
+            session = self._session(ctx)
+            found = self.memory.event(
+                "objective_suggested", {"objective": objective[:500], "why": why[:1000]}, session.number
+            )
+            return f"recorded as suggestion {found} for the user"
+
+        @tool
         def report_objective_complete(evidence: str, ctx: Context) -> str:
             """Claim the objective is met when no success check can show it. The run pauses after this session until the
             user confirms or rejects the claim."""
