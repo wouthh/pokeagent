@@ -845,7 +845,7 @@ class Gen3:
     def _rom_at(self, pointer: int, size: int = 1) -> int | None:
         """The file offset of a ROM pointer, or None when `size` bytes there are not in the ROM."""
         offset = pointer - 0x08000000
-        return offset if offset >= 0 and offset + size <= len(self.rom) and pointer >> 24 == 8 else None
+        return offset if offset >= 0 and pointer < 0x0A000000 and offset + size <= len(self.rom) else None
 
     def _map_loaded(self, header: bytes, layout: tuple[int, int, int]) -> bool:
         """Whether the game has loaded a map: the header's layout and events pointers are in the ROM and the map grid
