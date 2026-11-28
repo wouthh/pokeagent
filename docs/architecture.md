@@ -57,7 +57,9 @@ Thin interfaces exist only at these seams, each with one implementation for now:
   - `ram_hash`: sha256 of system RAM plus save RAM;
   - `save_ram`: the cartridge's battery RAM, read-only (what a `.sav` file holds);
   - `save_state` / `load_state`.
-- There is no write operation.
+- There is no write operation. A `.sav` given when the worker starts (`Emulator(..., battery=PATH)`, bound
+  read-only) is copied into the cartridge's battery RAM before the first frame, as any emulator loads a save; a
+  file that does not fit the cartridge stops the worker.
 - Checkpoints and timelines live in the run directory and the memory store (phases 4–5). Running the same inputs
   from the same state gives the same RAM hash and state (tested), although recovery never replays inputs.
 
@@ -122,7 +124,9 @@ action and the status panel; on by default), `--web [HOST:]PORT` (the same on a 
   types, members without a nickname). `direct` adds nothing. `--glitches` adds the adapter's glitch allowance
   (`GLITCHES`); without it the prompt rules out glitches. Side quests and house rules are guidance, not checks.
 - **`--from RUN`** starts a new run on that run's ROM from its latest state (copied as the new run's
-  `recovery.state`; the core and options must match); `run.json` records it as `from`.
+  `recovery.state`; the core and options must match); `run.json` records it as `from`. **`--rom ROM --sav FILE`**
+  starts the cartridge with that in-game save (any emulator's 32 KB `.sav`, checked with the game's checksum) and
+  keeps the power-on state as the first `recovery.state`, so the agent chooses CONTINUE itself.
 - **Resume** loads `recovery.state` (else the latest checkpoint, else power-on). Notes and progress are current with
   it, so nothing is replayed or restored.
 - **State before a game:** until a game is started or loaded, the adapter reports only the screen, because WRAM
@@ -573,9 +577,8 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
   The Tk window and both pages scale the 160x144 frame to the available space (nearest neighbour, aspect kept).
 - **2026-11-28: Keyboard play is on a copy, without sound or `.sav` loading.** `view --keyboard` feeds held keys to
   a fresh sandboxed emulator loaded from the run's state, so the run, its timeline and the agent's knowledge never
-  see human input. Sound would mean carrying audio out of the sandbox and a playback dependency; loading a `.sav`
-  would need a memory-write operation the worker deliberately lacks. Both are what other emulators are for, and
-  `--out` or `export-sav` hands the game over to them.
+  see human input. Sound would mean carrying audio out of the sandbox and a playback dependency, which is what
+  other emulators are for; `--out` or `export-sav` hands the game over to them.
 - **2026-11-27: Game names come from the user's ROM at runtime,** not from tables in the repository, and the walk grid
   is computed from the map and tileset data in RAM and ROM instead of hand-written maps.
 - **2026-11-27: Timeline-bound context is saved with each checkpoint.** `notes.md` and `state.json` are copied next to
@@ -650,3 +653,7 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
 - **2026-11-28: Objective ideas from the agent are suggestions only.** `suggest_objective` records an event that
   `status` shows; the run's objective stays immutable, and the user starts a run with a suggestion if they like it.
   `--from RUN` lets such a run (training, stat exp, competitive sets) start from an existing game.
+- **2026-11-28: A `.sav` is loaded only as a cartridge starts.** Wout wants runs to continue his own saves. The
+  worker copies the file into battery RAM once, before the first frame, from a read-only bind, the way any frontend
+  loads a save; there is still no operation that writes memory while a game runs, and no tool reaches this one. The
+  file is checked as a whole Red/Blue save first and never changed.

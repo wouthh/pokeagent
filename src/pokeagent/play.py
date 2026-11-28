@@ -340,8 +340,10 @@ def new_run(
     style: str = "natural",
     glitches: bool = False,
     source: Path | None = None,
+    sav: Path | None = None,
 ) -> Path:
-    """Create a run directory for a supported ROM, or for `source`'s ROM starting from that run's latest game. Only
+    """Create a run directory for a supported ROM, or for `source`'s ROM starting from that run's latest game. With
+    `sav`, the ROM's cartridge starts with that in-game save (read, never changed), so the game offers CONTINUE. Only
     the adapter's default objective gets its trusted check; `success` is the user's own check. The natural `style`
     draws the run's variety here, once; `glitches` allows the game's known glitches."""
     if style not in STYLES:
@@ -355,6 +357,13 @@ def new_run(
             raise ValueError(f"run {source.name} has no game to start from yet")
     data = rom.read_bytes()
     adapter = Gen1(data)  # refuses unsupported ROMs
+    if sav:
+        if not adapter.save_complete(saved := sav.read_bytes()):
+            raise ValueError(f"{sav} is not a whole Red/Blue save (32 KB with the game's checksum)")
+        with Emulator(core_path(CORE), rom, options=CORE_OPTIONS, battery=sav) as emu:
+            if emu.save_ram() != saved:
+                raise ValueError(f"the cartridge did not take {sav}")
+            start = emu.save_state()  # power-on with the save in the cartridge
     if success is not None:
         objectives.validate(success, [name for name in OBSERVATIONS if name != "in_game"])
     (data_dir / "runs").mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -375,7 +384,7 @@ def new_run(
         "style": style,
         "glitches": glitches,
         "variety": draw_variety(adapter, earlier) if style == "natural" else None,
-        "from": source.name if source else None,
+        "from": f"run {source.name}" if source else f"save file {sav.name}" if sav else None,
     }
     (run_dir / "run.json").write_text(json.dumps(meta, indent=1) + "\n")
     if start:

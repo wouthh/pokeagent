@@ -4,7 +4,8 @@ Protocol on stdin/stdout: every message is one JSON line; when it has `"n": N`, 
 `op`; replies carry `ok` and either the result fields or `error`. The core prints to stdout on its own, so fd 1 is
 redirected to stderr and replies go to a private duplicate of the original stdout.
 
-There is deliberately no memory-write operation: progress happens only through controller inputs.
+There is deliberately no memory-write operation: progress happens only through controller inputs. A battery file
+given at start is the cartridge's own save, put in place before the first frame as any emulator loads a .sav.
 """
 
 import hashlib
@@ -17,7 +18,7 @@ MAX_BLOB = 16 << 20
 BUTTONS = frozenset({"a", "b", "select", "start", "up", "down", "left", "right", "l", "r", "x", "y"})
 
 
-def serve(core: str, rom: str, options: dict[str, str]) -> None:
+def serve(core: str, rom: str, options: dict[str, str], battery: str | None = None) -> None:
     rpc_out = os.fdopen(os.dup(1), "wb")
     os.dup2(2, 1)
     rpc_in = sys.stdin.buffer
@@ -85,6 +86,13 @@ def serve(core: str, rom: str, options: dict[str, str]) -> None:
                     h.update(view)
             return h.hexdigest()
 
+        if battery:
+            with open(battery, "rb") as file:
+                data = file.read()
+            save = session.core.get_memory(0)  # RETRO_MEMORY_SAVE_RAM
+            if save is None or len(data) != len(save):
+                sys.exit("the save file does not fit this cartridge's battery RAM")
+            save[:] = data
         # SameBoy refuses to serialize until the first frame has run, so run it now: every state op then works.
         session.run()
         av = session.core.get_system_av_info()
@@ -154,4 +162,4 @@ def serve(core: str, rom: str, options: dict[str, str]) -> None:
 
 
 if __name__ == "__main__":
-    serve(sys.argv[1], sys.argv[2], json.loads(sys.argv[3]))
+    serve(sys.argv[1], sys.argv[2], json.loads(sys.argv[3]), *sys.argv[4:5])

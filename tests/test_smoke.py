@@ -21,6 +21,7 @@ def test_console_script_help():
 def test_play_needs_a_rom_or_a_run_to_start_from(capsys):
     assert cli.main(["play"]) == 1 and "either --rom" in capsys.readouterr().err
     assert cli.main(["play", "--rom", "x.gb", "--from", "r1"]) == 1 and "either --rom" in capsys.readouterr().err
+    assert cli.main(["play", "--from", "r1", "--sav", "x.sav"]) == 1 and "either --rom" in capsys.readouterr().err
 
 
 def test_find_run_path_resolves_owning_data_dir(tmp_path):

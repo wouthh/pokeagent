@@ -4,7 +4,7 @@ from pokeagent import cli, play, stats
 from pokeagent.memory import Memory
 
 META = {"objective": "finish the game", "rom_sha1": "red", "family": "pokemon-gen1"}
-META |= {"style": "natural", "glitches": True, "from": "r0"}
+META |= {"style": "natural", "glitches": True, "from": "run r0"}
 
 
 def played(tmp_path, run, cost, waited=0.0):
