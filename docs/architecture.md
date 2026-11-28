@@ -19,7 +19,7 @@ pokeagent play/resume ── orchestrator (trusted, host)
   ├─ capability registry (builtin + declarative + code extensions, versioned, with contracts)
   ├─ memory store (SQLite + FTS5) + run files, timeline-aware
   ├─ stuck detector, policy, budgets, checkpoints, metrics
-  ├─ viewer (Tk window and read-only web page: frame + status panel; keyboard play on a copy)
+  ├─ viewer (Tk window and read-only web pages: frame + status panel, run browser; keyboard play on a copy)
   └─ child processes, each in its own bwrap sandbox with minimal mounts:
        live emulator worker   python/venv, package, core .so, ROM (ro); tmpfs
        extension host         python/venv, package, that capability version (ro); tmpfs; no ROM
@@ -154,6 +154,8 @@ action and the status panel; on by default), `--web [HOST:]PORT` (the same on a 
   under the frame, refreshed at session starts and ends, milestones and stuck notices.
 - `pokeagent runs`: one line per run (state, play sessions and actions, and the map, badges and party read from its
   latest state on a fresh emulator, about 0.3 s per run).
+- `pokeagent web [[HOST:]PORT]`: `viewer.browse`, a read-only run browser (`/`, `/run/<id>` with the status panel,
+  latest frame and the newest 24 current-timeline checkpoints); see Decisions.
 - `pokeagent view RUN [CHECKPOINT]`: the game window (and/or `--web` page) with the latest state (or a checkpoint of
   the current timeline) and the status panel, without playing. `--keyboard` plays a copy with the keyboard instead,
   two frames per step at the core's speed, and `--out` keeps an in-game save made there. `pokeagent export-sav RUN [CHECKPOINT] [--out PATH] [--force]`: the game
@@ -555,6 +557,12 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
   address or `localhost` (DNS rebinding). There is no login: on the network, anyone who can reach the port sees the
   game and the run panel, so that stays an explicit choice, and the firewall (here the Wi-Fi interface's `drop` zone)
   has to admit the port.
+- **2026-11-28: `pokeagent web` draws frames on demand and stores none.** Run ids and checkpoint names come from the
+  run listing (never a request path joined onto the disk), the same Host check, GET-only and no-store headers as
+  `viewer.serve` apply, and nothing on it changes a run. A frame is a checkpoint's existing `.state` loaded on a fresh
+  sandboxed emulator for one frame, so previous images cost no disk; a bounded in-memory cache (64 PNGs, keyed by run,
+  file and mtime) keeps refreshing pages from booting an emulator per request, and the gallery stops at 24 checkpoints.
+  The Tk window and both pages scale the 160x144 frame to the available space (nearest neighbour, aspect kept).
 - **2026-11-28: Keyboard play is on a copy, without sound or `.sav` loading.** `view --keyboard` feeds held keys to
   a fresh sandboxed emulator loaded from the run's state, so the run, its timeline and the agent's knowledge never
   see human input. Sound would mean carrying audio out of the sandbox and a playback dependency; loading a `.sav`

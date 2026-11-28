@@ -797,13 +797,17 @@ class Runner:
         return 1
 
 
-def latest_state(run_dir: Path) -> bytes | None:
-    """The game as it was after the last action (or restore), else the latest checkpoint, else None (power-on)."""
+def latest_path(run_dir: Path) -> Path | None:
+    """The file of the game as it was after the last action (or restore), else the latest checkpoint, else None."""
     if (recovery := run_dir / "recovery.state").exists():
-        return recovery.read_bytes()
-    if saved := sorted((run_dir / "checkpoints").glob("*.state")):
-        return saved[-1].read_bytes()
-    return None
+        return recovery
+    return saved[-1] if (saved := sorted((run_dir / "checkpoints").glob("*.state"))) else None
+
+
+def latest_state(run_dir: Path) -> bytes | None:
+    """The latest game state's bytes, or None (power-on)."""
+    path = latest_path(run_dir)
+    return path.read_bytes() if path else None
 
 
 def restorable(run_dir: Path, memory: Memory) -> list[dict]:
@@ -1042,19 +1046,36 @@ def _where(run_dir: Path) -> str:
     return f"{state['map']}, {state['badges']} badges, {team}"
 
 
-def list_runs(data_dir: Path) -> str:
-    """One line per run in `data_dir`, oldest first: its id, state, play sessions and actions, and where its game
-    stands."""
-    lines = []
+def run_rows(data_dir: Path, where=_where) -> list[dict]:
+    """One dict per run in `data_dir`, oldest first: id, state (with its reason), play sessions, actions, and where
+    its game stands (`where(run_dir)`)."""
+    rows = []
     for meta in sorted((data_dir / "runs").glob("*/run.json")):
         run_dir = meta.parent
         with contextlib.closing(open_memory(run_dir, data_dir)) as memory:
             state, reason = memory.status()
-            rows = [r for r in stats.sessions(memory) if r["mode"] == "play"]
+            played = [r for r in stats.sessions(memory) if r["mode"] == "play"]
         if state == "running" and not stats.live(run_dir):  # the store says running until the run ends or pauses
             state, reason = "stopped", ""
-        played = f"{len(rows)} sessions, {sum(r['actions'] for r in rows):,} actions"
-        lines.append(f"{run_dir.name}  {state}{f' ({reason})' if reason else ''}; {played}; {_where(run_dir)}")
+        rows.append(
+            {
+                "id": run_dir.name,
+                "state": f"{state} ({reason})" if reason else state,
+                "sessions": len(played),
+                "actions": sum(r["actions"] for r in played),
+                "where": where(run_dir),
+            }
+        )
+    return rows
+
+
+def list_runs(data_dir: Path) -> str:
+    """One line per run in `data_dir`, oldest first: its id, state, play sessions and actions, and where its game
+    stands."""
+    lines = [
+        f"{r['id']}  {r['state']}; {r['sessions']} sessions, {r['actions']:,} actions; {r['where']}"
+        for r in run_rows(data_dir)
+    ]
     return "\n".join(lines) or f"no runs in {data_dir / 'runs'}"
 
 

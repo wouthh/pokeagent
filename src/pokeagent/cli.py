@@ -88,6 +88,11 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--out", type=Path, help="where to write it (default: <ROM name>.sav in the run folder)")
     export.add_argument("--force", action="store_true", help="replace --out if it exists")
     export.add_argument("--data-dir", type=Path, help="where runs live (default ~/.local/share/pokeagent)")
+    web = commands.add_parser(
+        "web", help="browse every run's game (latest frame and checkpoints) on a read-only web page"
+    )
+    web.add_argument("address", nargs="?", default="8765", type=web_address, metavar="[HOST:]PORT", help=WEB_HELP)
+    web.add_argument("--data-dir", type=Path, help="where runs live (default ~/.local/share/pokeagent)")
     runs = commands.add_parser("runs", help="list the runs and where each one's game stands")
     runs.add_argument("--data-dir", type=Path, help="where runs live (default ~/.local/share/pokeagent)")
     status = commands.add_parser("status", help="where a run stands")
@@ -229,6 +234,20 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError, RuntimeError) as e:  # includes SandboxError and EmulatorError
             print(f"pokeagent: {e}", file=sys.stderr)
             return 1
+    elif args.command == "web":
+        import threading
+
+        from pokeagent import play, viewer
+
+        try:
+            server = viewer.browse(args.data_dir or play.default_data_dir(), args.address)
+        except OSError as e:
+            print(f"pokeagent: {e}", file=sys.stderr)
+            return 1
+        print(f"runs at http://{args.address[0]}:{server.server_address[1]}/ (Ctrl-C to stop)", flush=True)
+        with contextlib.suppress(KeyboardInterrupt):
+            threading.Event().wait()
+        server.shutdown()
     elif args.command == "runs":
         from pokeagent import play
 

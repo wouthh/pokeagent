@@ -113,6 +113,12 @@ it. `--web 0.0.0.0:8765` listens on your network too, for a phone or another com
 who can reach the port sees the page, and the firewall must let the port in (on Fedora,
 `sudo firewall-cmd --zone=<your Wi-Fi zone> --add-port=8765/tcp`, which lasts until firewalld reloads or the
 machine restarts).
+
+`pokeagent web [[HOST:]PORT] [--data-dir DIR]` (default port 8765) serves a read-only browser of every run: a list
+with each run's state and where its game stands, and per run the status panel, the latest frame (refreshed every
+couple of seconds while the run plays) and its newest 24 checkpoints. Frames are drawn on demand from the `.state`
+files the run already keeps and held in memory only, so browsing writes nothing to disk. The same address, network
+and firewall notes apply. The window and the pages scale the game screen to fill their space.
 When a problem keeps costing actions, the agent may ask for a development session, which writes and validates a
 code tool away from the live game. `--dev-share` (default 0.3 of the run's tokens), `--dev-attempts` (2 per tool),
 `--dev-timeout` (45 minutes) and `--dev-validations` (10 per session) on `play` and `resume` limit them; the first
