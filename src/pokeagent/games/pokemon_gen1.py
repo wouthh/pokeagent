@@ -305,7 +305,9 @@ class Gen1:
             "money": bcd(emu.read(MONEY, 3)),
             "badges": badges.bit_count(),
             "badge_bits": badges,
-            "dex_owned": sum(b.bit_count() for b in emu.read(DEX_OWNED, 19)),
+            # Looking at a starter's ball in Oak's Lab sets four owned flags while its Pokédex entry is shown (seen as
+            # a "4 species owned" milestone in live run 2); nothing is owned before the party has a member.
+            "dex_owned": sum(b.bit_count() for b in emu.read(DEX_OWNED, 19)) if party else 0,
             "dex_seen": sum(b.bit_count() for b in emu.read(DEX_SEEN, 19)),
             "battle": battle,
             # Before a game is started or loaded, WRAM holds power-on noise (SameBoy randomises it) or zeros.

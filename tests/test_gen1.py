@@ -6,7 +6,7 @@ import pytest
 
 from pokeagent.emulator.client import Emulator
 from pokeagent.emulator.cores import core_path
-from pokeagent.games.pokemon_gen1 import CHARMAP, CORE_OPTIONS, Gen1, Grid, bcd, decode
+from pokeagent.games.pokemon_gen1 import CHARMAP, CORE_OPTIONS, DEX_OWNED, PARTY_COUNT, Gen1, Grid, bcd, decode
 from pokeagent.play import Game
 
 ENCODE = {v: k for k, v in CHARMAP.items() if len(v) == 1}
@@ -153,6 +153,20 @@ def test_state_tolerates_any_ram(rom_path):
     for seed in range(200):
         state = gen1.state(Noise(seed))
         gen1.state_text(state), gen1.observations(state), gen1.fingerprint(state)
+
+
+def test_nothing_is_owned_before_the_party_has_a_member(rom_path):
+    gen1 = Gen1(rom_path.read_bytes())
+
+    class Ram:
+        def __init__(self, party_count):
+            self.mem = {PARTY_COUNT: party_count, DEX_OWNED: 0b01001011}  # the starter balls' display flags
+
+        def read(self, addr, n):
+            return bytes(self.mem.get(a, 0) for a in range(addr, addr + n))
+
+    assert gen1.state(Ram(0))["dex_owned"] == 0
+    assert gen1.state(Ram(1))["dex_owned"] == 4
 
 
 def test_press_waits_for_a_menu_to_react(game):
