@@ -168,6 +168,7 @@ HOPS = {
 # Side walls (0xB0-0xB7) block entering them in a direction when the low three bits of the collision byte are in it.
 SIDE_WALLS = {"down": {2, 6, 7}, "up": {3, 4, 5}, "right": {1, 5, 7}, "left": {0, 4, 6}}
 TALL_GRASS, SURF_MOVE, FOG_BADGE = 0x18, 57, 3
+PAGE_BLANKS = 150  # blank tiles that make a screen without boxes a text page (the overworld has almost none)
 PERMISSION_WATER = 1
 TIMES_OF_DAY = ("morning", "day", "night")
 
@@ -335,9 +336,8 @@ class Gen2(Gen1):
         return emu.read(self.ram.TILEMAP, 20 * 18)
 
     @classmethod
-    def screen_text(cls, tiles: bytes) -> list[str]:
-        """The text of the screen, only from inside boxes: the other tiles are map, pictures and HUD tiles whose ids
-        decode as letters. Rows keep their columns, so a cursor's column locates its label."""
+    def _inside(cls, tiles: bytes) -> bytearray:
+        """1 for every tile inside a box (┌ ... ┘); picture boxes are skipped."""
         inside = bytearray(360)
         for at in (i for i, tile in enumerate(tiles) if tile == BOX_TOP_LEFT):
             x, y = at % 20, at // 20
@@ -356,8 +356,27 @@ class Gen2(Gen1):
                     break
                 if tiles[y2 * 20 + x] != BOX_SIDE:
                     break
-        shown = bytes(t if inside[i] else 0x7F for i, t in enumerate(tiles))
-        return [cls.decode(shown[r * 20 : (r + 1) * 20]).replace("·", " ").rstrip() for r in range(18)]
+        return inside
+
+    @classmethod
+    def screen_text(cls, tiles: bytes) -> list[str]:
+        """The text of the screen, only from inside boxes: the other tiles are map, pictures and HUD tiles whose ids
+        decode as letters. A page with no box and mostly blank tiles (naming screen, trainer card) is text all over:
+        its rows count when they hold a letter or digit. Rows keep their columns, so a cursor's column locates its
+        label."""
+        inside = cls._inside(tiles)
+        page = not any(inside) and tiles.count(0x7F) >= PAGE_BLANKS
+        shown = bytes(t if page or inside[i] else 0x7F for i, t in enumerate(tiles))
+        lines = [cls.decode(shown[r * 20 : (r + 1) * 20]).replace("·", " ").rstrip() for r in range(18)]
+        return [line if not page or any(c.isalnum() for c in line) else "" for line in lines]
+
+    @classmethod
+    def screen_mode(cls, tiles: bytes, in_battle: bool) -> dict:
+        """The shared modes, and "menu" for a text page (it takes input, and `advance_text` must not press A there)."""
+        mode = super().screen_mode(tiles, in_battle)
+        if mode["mode"] == "overworld" and not any(cls._inside(tiles)) and any(cls.screen_text(tiles)):
+            mode["mode"] = "menu"
+        return mode
 
     def _wram_ok(self, emu: Emulator) -> bool:
         """D000-DFFF is bank 1 (where the game state lives) only while SVBK selects it (0 selects bank 1 too)."""
