@@ -25,7 +25,9 @@ from pokeagent.games.pokemon_gen3 import (
     decode_quantity,
     flag,
     layout_problems,
+    load_map_names,
     valid_name,
+    words,
 )
 
 ROM_NAMES = {
@@ -349,3 +351,71 @@ def test_a_fresh_game_has_no_game_in_progress_and_the_shared_state_shape(booted)
     assert set(state["screen"]) == {"mode", "cursor", "cursor_at", "yes_no", "waiting"}
     assert "No game is in progress" in adapter.state_text(state)
     assert emu.save_state() and adapter.advance_text(emu, quiet_frames=8)["outcome"] in ("no_text", "closed", "timeout")
+
+
+class StubEmu:
+    """RAM as a dict of byte runs; everything else reads as zeros."""
+
+    def __init__(self, **runs):
+        self.runs = runs
+
+    def read(self, addr, n):
+        for start, data in self.runs.items():
+            if int(start[1:], 16) <= addr < int(start[1:], 16) + len(data):
+                return (data + bytes(n))[addr - int(start[1:], 16) :][:n]
+        return bytes(n)
+
+
+def stub_adapter(family="e"):
+    adapter = FakeRom(family)
+    adapter.rom, adapter.layout = bytes(0x100), LAYOUTS[family]
+    adapter.bad_layout, adapter.functions, adapter._behaviours = [], None, {}
+    adapter.sections, adapter.first_section = ["LITTLEROOT TOWN"] * 20, 0
+    adapter.map_names = load_map_names(family)
+    return adapter
+
+
+def test_no_game_is_in_progress_until_a_map_is_loaded_and_the_grid_never_raises():
+    adapter = stub_adapter()
+    sb1, sb2 = 0x02025A20, 0x02024A74
+    emu = StubEmu(
+        **{
+            f"x{LAYOUTS['e'].SB1:x}": struct.pack("<II", sb1, sb2),
+            f"x{sb2:x}": tables.encode("ASH")[:8].ljust(8, b"\xff"),  # named, but the map header is still empty
+        }
+    )
+    state = adapter.state(emu)
+    assert state["in_game"] is False and state["map"] == ""
+    grid = adapter.grid(emu)  # used to raise IndexError on the empty header
+    assert (grid.width, grid.height) == (0, 0) and grid.path((0, 0), (1, 0)) is None
+    header = struct.pack("<II", 0x08000010, 0x08000020) + bytes(20)  # a header in the ROM, but a grid of size zero
+    assert not adapter._map_loaded(header, (0, 0, 0x02030000))
+    assert adapter._map_loaded(header, (20, 20, 0x02030000))
+    assert not adapter._map_loaded(struct.pack("<II", 0x08000010, 0x09999999) + bytes(20), (20, 20, 0x02030000))
+    assert adapter._tileset_behaviours(0x08000010) == []  # tileset pointers outside the ROM give no behaviours
+
+
+def test_map_identifiers_name_rooms_and_fall_back_to_the_section_and_group_number():
+    for family, size in (("rs", 394), ("e", 518), ("frlg", 425)):
+        names = load_map_names(family)
+        assert len(names) == size and all(" " not in name for name in names.values())
+    assert words("LittlerootTown_BrendansHouse_1F") == "Littleroot Town - Brendans House - 1F"
+    assert words("Route101") == "Route 101" and words("SSAnne_Exterior") == "SS Anne - Exterior"
+    adapter = stub_adapter()
+    assert adapter.map_name(1, 0, 0) == "Littleroot Town - Brendans House - 1F" or adapter.map_name(1, 0, 0).startswith(
+        "LITTLEROOT"
+    )
+    adapter.sections = ["PETALBURG CITY"] * 20  # a header whose section does not fit the identifier: do not guess
+    assert adapter.map_name(0, 9, 0) == "PETALBURG CITY (0.9)"
+    assert adapter.map_name(99, 99, 0) == "PETALBURG CITY (99.99)"  # a map pret does not list
+
+
+@pytest.mark.parametrize(("game", "where", "section", "name"), [
+    ("ruby", (1, 0), 0, "Littleroot Town - Brendans House - 1F"),
+    ("emerald", (0, 9), 0, "Littleroot Town"),
+    ("firered", (4, 1), 0x58, "Pallet Town - Players House - 2F"),
+    ("leafgreen", (3, 0), 0x58, "Pallet Town"),
+])  # fmt: skip
+def test_rooms_have_their_own_names_on_the_real_roms(gba, game, where, section, name):
+    adapter, _ = gba(game)
+    assert adapter.map_name(*where, section) == name
