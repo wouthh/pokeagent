@@ -308,14 +308,14 @@ class Gen2(Gen1):
         """The map's name (known dumps) or its area name from the ROM's landmark table plus its raw ids (hacks)."""
         if name := self.map_names.get(map_id):
             return name
-        area = self._area(emu.read(self.ram.MAP_ATTRIBUTES, 5), emu.read(self.ram.TILESET, 1)[0])
+        area = self._area(emu.read(self.ram.MAP_ATTRIBUTES, 5))
         return f"{area + ' ' if area else ''}(map {map_id >> 8}:{map_id & 255})"
 
-    def _area(self, attributes: bytes, tileset: int) -> str:
+    def _area(self, attributes: bytes) -> str:
         """The landmark name of the map whose attribute pointer is (bank, address): the map's row in the ROM's map
         group tables is `bank, tileset, environment, pointer(2), landmark`."""
-        bank, pointer = attributes[0], attributes[3:5]
-        key = (bank, pointer)
+        bank, tileset, pointer = attributes[0], attributes[1], attributes[3:5]
+        key = (bank, tileset, pointer)
         if key not in self._areas:
             pattern = re.compile(re.escape(bytes([bank])) + b".[\\x00-\\x07]" + re.escape(pointer), re.S)
             found = next((m for m in pattern.finditer(self.rom) if self.rom[m.start() + 1] == tileset), None)
