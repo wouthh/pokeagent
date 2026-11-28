@@ -288,6 +288,7 @@ class Gen1:
                 "enemy": self.species_name(e[0]),
                 "enemy_level": emu.read(ENEMY_LEVEL, 1)[0],
                 "enemy_hp": int.from_bytes(e[1:3]),
+                "enemy_pos": e[3],  # wEnemyMonPartyPos: which party member of the enemy is out
                 "enemy_max_hp": int.from_bytes(emu.read(ENEMY_MAX_HP, 2)),
             }
         badges = emu.read(BADGES, 1)[0]
