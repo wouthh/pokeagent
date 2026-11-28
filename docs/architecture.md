@@ -71,11 +71,23 @@ any other ROM is refused with the list of supported games. The contract every ad
 natural style's starters, team types, side quests and glitch text, the shared state shape, and the controller-only
 macros. `run.json` records the adapter's family, core and core options, so restores and `--from` check them.
 
-## Game adapter: Pokémon Red/Blue *(implemented, phase 3)*
+## Game adapter: Pokémon Gen 1 *(implemented, phase 3; Yellow and hacks added later)*
 
-`games/pokemon_gen1.py`, for the English Red and Blue (sha1 allowlist; any other ROM is refused). Addresses come
-from the pret pokered disassembly. Pokémon, item and move names are read from the user's ROM at runtime, so no game
-text is stored in the repository; `gen1_map_names.txt` holds only the map constant names.
+`games/pokemon_gen1.py`, for the English Red, Blue and Yellow and hacks of their engine. Addresses come from the
+pret pokered and pokeyellow disassemblies. Pokémon, item and move names, the type names and the collision tables are
+read from the user's ROM at runtime, so no game text is stored in the repository; `gen1_map_names.txt` and
+`gen1_yellow_map_names.txt` hold only the map constant names.
+
+- **Version from the ROM, not a sha1.** `gen1_tables.find_tables(rom)` locates every table by facts in the ROM (the
+  one run of 190 ten-byte name records, the strings after POUND and MASTER BALL, the pointers to NORMAL, FIGHTING and
+  FLYING, the first rows of the tile-pair and ledge tables). `recognises` is true when all six are found, so Blue Kaizo
+  works with no entry; `ROMS` only names known dumps (an unknown one is "Gen 1 ROM hack (header title X)"). Yellow
+  (header title) selects its own layout, `STARTERS` (Pikachu only), side quests, map names and colour core options.
+- **Layout probe.** `RAM_LAYOUTS` holds Red/Blue's WRAM addresses and Yellow's (one lower from `WALK_COUNTER` on).
+  The first `state` of a running game checks the guess against the game's own invariants (name, party and bag
+  terminators, map header, tileset pointers) and switches to the layout that fits; if none does the state says the
+  layout is unverified instead of refusing the game.
+- **Yellow:** Pikachu follows in sprite slot 15, which `grid` skips so it never blocks `walk_to`.
 
 - **State** (`state`): map and position, facing, screen text decoded from the tile map, screen mode
   (overworld, dialog, menu, battle, plus cursor, yes/no and waiting-arrow flags), names, party, bag, money, badges,
@@ -422,6 +434,16 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
 **Pokémon Red/Blue (English)**
 
 - The pret pokered symbols used by the adapter are identical in the Red and Blue builds.
+- Yellow (sha1 `cc7d03262ebfaf2f06772c1a480c7d9d5f4a38e1`, MBC5, CGB-flagged) boots headless on SameBoy with
+  `sameboy_model` "Game Boy" and "Game Boy Color"; the screen tile map and charmap match Red's. WRAM matches Red before
+  `WALK_COUNTER` and is one byte lower from there on (pokeyellow.sym). ROM tables: species 3A:4000, items
+  01:45B7, moves 2F:4000, types 09:7D63, tile pairs 00:0ADA, ledges 06:6851. Preset names are YELLOW/ASH/JACK and
+  BLUE/GARY/JOHN; the Oak event in Pallet Town fires one step further north and starts a scripted wild Pikachu
+  screen. Not verified: receiving Pikachu and the follower on a walked grid.
+- Blue Kaizo differs from Blue only in gameplay data (trainers, wild Pokémon, stats, maps); names, tables and RAM
+  addresses are unchanged, so it works with the Red/Blue layout. Japanese Red/Green/Blue are not supported: pret has no
+  Japanese target (the one fork is a 2017 work in progress), and they need ROMs to test, a kana charmap and shorter
+  name records.
 - After a warp, the map id changes about 30 frames before the new map's blocks are loaded; reading the walk grid
   earlier shows the old map. `step` waits until the map buffer changes and input is accepted again.
 - Menus drop a direction press made in the first frames after they open; `choose` re-reads the cursor and retries.
@@ -655,6 +677,11 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
   `run.json`; the house rules stay guidance in the brief, because judging a "balanced" or "natural" game has no
   trustworthy check. `--style direct` keeps the shortest route for benchmarks. The four runs made before styles
   existed were migrated once to `"style": "direct"` with no variety, as they were played.
+- **2026-11-28: Gen 1 versions come from scanning the ROM.** Yellow differs from Red/Blue in WRAM by one byte and
+  in table addresses; hacks such as Blue Kaizo keep Red/Blue's. Rather than one sha1 and one address set per dump, the
+  adapter scans for its ROM tables at construction (`recognises` = all found) and keeps two WRAM layouts, picked from
+  the header and confirmed by a read-only probe of the running game. Ruled out: subclasses per version (the games
+  differ in data, not behaviour) and a sha1 allowlist (it refuses every hack).
 - **2026-11-28: Glitches are opt-in and stay controller input.** `--glitches` only changes what the agent may do
   with the controller; there is still no memory-write path. Glitch routes can satisfy the Hall of Fame check, which
   is accepted as for a glitched speedrun.

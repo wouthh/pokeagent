@@ -7,7 +7,10 @@ language. It keeps what it learns, and it builds and validates its own tools whe
 - **Emulation:** unchanged upstream [libretro](https://www.libretro.com) cores, loaded in-process through
   [libretro.py](https://github.com/JesseTG/libretro.py). SameBoy is used for Game Boy and Game Boy Color; GBA (mGBA)
   and DS (melonDS DS) come later.
-- **First use case:** Pokémon Red/Blue (English releases). The first long-term benchmark is finishing a whole
+- **Supported games:** Pokémon Red, Blue and Yellow (English), and hacks built on their engine such as Blue Kaizo
+  (found by scanning the ROM; Brown is expected to work but is untested). Japanese Red/Green/Blue need their own
+  ROMs and a kana charmap and are not supported yet.
+- **First use case:** Pokémon Red/Blue. The first long-term benchmark is finishing a whole
   playthrough without help.
 
 > **Status:** the play loop, memory and timelines, the agent's own observations, macros and validated code tools,
@@ -185,7 +188,8 @@ scripts/check.sh
 Runs ruff (lint and format), installs the pinned cores if missing, runs the test suite (including sandbox escape
 tests and the MIT-licensed [dmg-acid2](https://github.com/mattcurrie/dmg-acid2) test ROM), and fails if any ROM,
 save or state file is tracked. No game ROM is needed; with your own Red or Blue dump in `roms/` (ignored) or
-`POKEAGENT_ROM` set, the adapter tests also boot a new game and walk out of the player's house.
+`POKEAGENT_ROM` set, the adapter tests also boot a new game and walk out of the player's house; Yellow, Blue Kaizo
+and the Gen 2 dumps there add the version and scanner tests.
 
 ## Licence
 
