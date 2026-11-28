@@ -290,6 +290,8 @@ class Gen1:
     STARTERS, TEAM_TYPES, SIDE_QUESTS, GLITCHES = STARTERS, TEAM_TYPES, SIDE_QUESTS, GLITCHES
 
     CHARMAP, TILEMAP, WAIT_ROW, STEP_FRAMES, REACT_FRAMES = CHARMAP, TILEMAP, 16, 24, REACT_FRAMES
+    # `press` settles when the screen has been still for SETTLE_STILL frames, or after SETTLE_CAP frames
+    SETTLE_STILL, SETTLE_CAP = 32, 120
 
     @classmethod
     def decode(cls, data: bytes) -> str:
@@ -614,14 +616,27 @@ class Gen1:
 
     def press(self, emu: Emulator, button: str, hold: int = 2, wait: int = 12) -> None:
         """Hold `button`, release, wait `wait` frames, then keep waiting (up to REACT_FRAMES in all) until the screen
-        changes: a menu keeps showing its cursor for about 16 frames after it accepted a press."""
+        changes: a menu keeps showing its cursor for about 16 frames after it accepted a press. Once it has changed,
+        wait until the tile map has stood still for SETTLE_STILL frames (at most SETTLE_CAP more): a menu or screen
+        is drawn over many frames and takes no input before it is done, so the next press would be lost and the
+        result would show a half-drawn screen. Text printing and animations only run into the cap."""
         before = self.screen_tiles(emu)
         emu.run([button], hold)
         emu.run([], wait)
         for _ in range(wait, self.REACT_FRAMES, 4):
             if self.screen_tiles(emu) != before:
-                return
+                break
             emu.run([], 4)
+        else:
+            return  # nothing happened (a wall, a closed menu): nothing to settle
+        last, still = self.screen_tiles(emu), 0
+        for _ in range(0, self.SETTLE_CAP, 4):
+            emu.run([], 4)
+            tiles = self.screen_tiles(emu)
+            still = still + 4 if tiles == last else 0
+            if still >= self.SETTLE_STILL:
+                return
+            last = tiles
 
     def _position(self, emu: Emulator) -> tuple[int, int, int]:
         m = emu.read(self.ram.CUR_MAP, 5)

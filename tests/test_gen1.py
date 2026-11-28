@@ -255,3 +255,15 @@ def test_press_waits_for_a_menu_to_react(game):
     assert gen1.advance_text(emu)["outcome"] == "menu"
     gen1.press(emu, "a")  # YES
     assert not gen1.state(emu)["screen"]["yes_no"]
+
+
+def test_press_settles_before_returning(game):
+    # A menu is drawn over many frames and takes no input before it is done: the press that opens it must not return
+    # early, or the next press is lost and the result shows a half-drawn screen.
+    gen1, emu, bedroom = game
+    emu.load_state(bedroom)
+    gen1.press(emu, "start")
+    row = gen1.state(emu)["screen"]["cursor_at"][1]
+    gen1.press(emu, "down")
+    gen1.press(emu, "down")
+    assert gen1.state(emu)["screen"]["cursor_at"][1] == row + 4  # two menu rows, two tile rows each
