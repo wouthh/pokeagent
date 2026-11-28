@@ -303,8 +303,7 @@ class Game:
     def _do(self, name: str, args: dict) -> str:
         """One builtin action. Also the step runner of macros, whose steps may leave out optional arguments."""
         adapter = self.adapter
-        state = adapter.state(self)
-        if name in ("walk", "walk_to") and not state["in_game"] and "frame_id" not in state:
+        if name in ("walk", "walk_to") and not (state := adapter.state(self))["in_game"] and "frame_id" not in state:
             raise ValueError("no game is in progress yet; use press and advance_text until one is")
         match name:
             case "press":
