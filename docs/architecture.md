@@ -63,6 +63,14 @@ Thin interfaces exist only at these seams, each with one implementation for now:
 - Checkpoints and timelines live in the run directory and the memory store (phases 4–5). Running the same inputs
   from the same state gives the same RAM hash and state (tested), although recovery never replays inputs.
 
+## Game adapters
+
+`games/identify(rom)` asks each adapter in `ADAPTERS` whether it recognises the ROM and builds the first that does;
+any other ROM is refused with the list of supported games. The contract every adapter follows is in the docstring of
+`games/__init__.py`: its core and options, default objective and trusted check, observations for success checks, the
+natural style's starters, team types, side quests and glitch text, the shared state shape, and the controller-only
+macros. `run.json` records the adapter's family, core and core options, so restores and `--from` check them.
+
 ## Game adapter: Pokémon Red/Blue *(implemented, phase 3)*
 
 `games/pokemon_gen1.py`, for the English Red and Blue (sha1 allowlist; any other ROM is refused). Addresses come

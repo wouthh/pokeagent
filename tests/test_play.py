@@ -671,7 +671,8 @@ def test_the_brief_carries_the_play_style_and_team_facts(tmp_path):
         "Your team now: levels 6 to 14; sharing a type: NORMAL (PIDGEY, RHINE); FLYING (PIDGEY, RHINE);"
         " no nickname yet: PIDGEY." in brief
     )
-    assert style_text({"variety": None, "glitches": False}, party) == []  # direct: the objective by its own route
+    direct = {"variety": None, "glitches": False}
+    assert style_text(direct, party, "Glitches: allowed") == []  # the objective by its own route
 
 
 def test_a_run_can_start_from_another_runs_game(rom_path, tmp_path):
@@ -708,7 +709,7 @@ def test_a_run_can_start_from_a_save_file(game, rom_path, tmp_path):
         fresh.load_state(latest_state(run_dir))
         assert fresh.save_ram() == sram  # the run's game starts with the save in the cartridge
     sav.write_bytes(sram[:0x3000] + bytes([sram[0x3000] ^ 1]) + sram[0x3001:])
-    with pytest.raises(ValueError, match="not a whole Red/Blue save"):
+    with pytest.raises(ValueError, match="not a whole in-game save"):
         new_run(rom_path, None, tmp_path / "data2", sav=sav)
 
 
