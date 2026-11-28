@@ -325,7 +325,7 @@ class Game:
                 result = adapter.walk_to(self, x, y)
             case "advance_text":
                 result = adapter.advance_text(self)
-                return f"{result['outcome']} after {result['presses']} A press(es)"
+                return f"{result['outcome']} after {result['presses']} press(es)"
             case _:
                 raise ValueError(f"unknown action {name}")
         self.run([], SETTLE_FRAMES)

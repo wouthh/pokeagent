@@ -496,6 +496,11 @@ class Grid:
         return f"    x from {xs.start}\n" + "\n".join(rows)
 
 
+def exit_warps(grid: Grid, warps) -> set[tuple[int, int]]:
+    """The warp events on door, stair, ladder and arrow tiles (behaviours 0x60-0x7F), the ones that fire."""
+    return {w for w in warps if 0x60 <= grid.behaviour(*w) < 0x80}
+
+
 def layout_problems(read, layout: SimpleNamespace) -> list[str]:
     """The RAM invariants a running game breaks under `layout` (none: it fits). A game that has not started its main
     loop yet has zeros in these places and breaks none. `read(addr, n) -> bytes`."""
@@ -562,6 +567,7 @@ class Gen3:
         else:
             self.sections = tables.pointed_names(rom, found["maps"], 213, 8, 4)
             self.first_section = 0
+        self._last_text = ""
         self.map_names = load_map_names(self.family)
         self._behaviours: dict[tuple[int, int], list[int]] = {}
 
@@ -639,7 +645,9 @@ class Gen3:
             state = struct.unpack_from("<H", window, 0x16)[0]
             if state:  # 0: finished
                 waiting = state in (5, 8, 9)  # wait for a button, ▼ after a paragraph, ▼ after a scroll
-                out.append((i, struct.unpack_from("<I", window, 0x20)[0], 2 if waiting else 0))
+                # the window holds the string's start and an index into it: the next character is their sum
+                start, index = struct.unpack_from("<I", window, 0x20)[0], struct.unpack_from("<H", window, 0x1E)[0]
+                out.append((i, start + index, 2 if waiting else 0))
         return out
 
     def _controller(self, emu: Emulator) -> int:
@@ -699,14 +707,28 @@ class Gen3:
         else:
             kind = "overworld"
         text = ""
-        if printers or waiting or yes_no:  # a finished message stays on screen until A or B, or its prompt is answered
+        if (
+            printers or waiting or yes_no or (kind == "menu" and not L.PRINTERS)
+        ):  # a finished message stays on screen until A or B, or its prompt is answered
             if printers:
                 pointer = printers[0][1]
             elif L.PRINTERS:
                 pointer = struct.unpack_from("<I", emu.read(L.PRINTERS, 4))[0]
             else:
-                pointer = struct.unpack_from("<I", emu.read(L.FIELD_WINDOW + 0x20, 4))[0]
+                # Ruby and Sapphire menus (boy or girl, the name) ask their question in the menu window
+                window = emu.read(L.MENU_WINDOW if kind == "menu" else L.FIELD_WINDOW, 0x30)
+                pointer = struct.unpack_from("<I", window, 0x20)[0] + struct.unpack_from("<H", window, 0x1E)[0]
             text = self._message(emu, pointer, in_battle) if pointer else ""
+            if text:
+                self._last_text = text
+            elif waiting:  # a prompt with no words of its own (Ruby's ▼): the message it follows is still up
+                text = self._last_text
+        else:
+            self._last_text = ""
+        if in_battle and not text and not cursor:  # between a battle's messages: the latest one is still in its buffer
+            where, size = L.BATTLE_TEXT
+            raw = emu.read(where, size)
+            text = tables.decode(raw[: raw.find(tables.END) if tables.END in raw else size]).strip()
         return {
             "mode": kind,
             "cursor": cursor,
@@ -922,7 +944,11 @@ class Gen3:
                 ox, oy = struct.unpack_from("<hh", o, 0x10)
                 sprites.add((ox - 7, oy - 7))
         surfing = bool(emu.read(L.AVATAR, 1)[0] & 8)
-        return Grid(width - 15, height - 14, cells, behaviours, surfing, sprites, warps)
+        grid = Grid(width - 15, height - 14, cells, behaviours, surfing, sprites)
+        # Doors, stairs, ladders and arrow tiles are the exits that fire; the map's other warp events (a second tile
+        # next to a door, the unopened door of the intro's truck) are only the game's bookkeeping
+        grid.warps = exit_warps(grid, warps)
+        return grid
 
     # ---- scoring and checks ----
 
@@ -1054,6 +1080,13 @@ class Gen3:
                 break
             emu.run([], 4)
         self._settled(emu)
+        for _ in range(0, 240, 4):  # a message still printing (or a battle animation) would show half a sentence
+            if not self._screen(emu, self._in_battle(emu), True)["printing"]:
+                break
+            emu.run([], 4)
+
+    def _in_battle(self, emu: Emulator) -> bool:
+        return bool(emu.read(self.layout.MAIN + self.layout.IN_BATTLE, 1)[0] >> 1 & 1)
 
     def _position(self, emu: Emulator) -> tuple[int, int, int]:
         """(map id, x, y) of the player; the map id is -1 while the save block is not there yet."""
@@ -1094,6 +1127,13 @@ class Gen3:
         self._settle(emu)
         emu.run([], 2)
         now = self._position(emu)
+        if now == start and start[1:] in self.grid(emu).warps:
+            # pushing into a wall from a warp tile (a door mat): the warp starts a moment later
+            for _ in range(0, 120, 4):
+                emu.run([direction], 4)
+                if self._position(emu) != start:
+                    break
+            now = self._position(emu)
         if now[0] == start[0] and now != start:
             self._settled(emu, cap=40)  # a warp fades in a few frames after the step ends
             now = self._position(emu)
@@ -1155,20 +1195,23 @@ class Gen3:
             if screen["cursor"]:
                 return {"outcome": "menu", "presses": presses}
             if screen["waiting"]:
-                quiet = 0
+                quiet = idle = 0
                 if presses >= max_presses:
                     return {"outcome": "press_limit", "presses": presses}
                 self.tap(emu, "b", hold=2, wait=8)
                 presses += 1
             elif screen["printing"]:
-                quiet = 0
+                quiet = idle = 0
                 emu.run(["b"], 6)  # B speeds a message up
             elif in_battle and not self.layout.PRINTERS:  # Ruby and Sapphire: no printer to watch, B moves it along
                 if presses >= max_presses:
                     return {"outcome": "press_limit", "presses": presses}
                 self.tap(emu, "b", hold=2, wait=20)
                 presses += 1
-            elif screen["busy"] and not in_battle and idle < 600:  # a script is still running (a cutscene): wait for it
+            elif (in_battle and self.layout.PRINTERS and idle < 900) or (
+                screen["busy"] and not in_battle and idle < 600
+            ):
+                # an animation (the next message or menu follows) or a running script (a cutscene): wait for it
                 idle += 4
                 emu.run([], 4)
             else:
