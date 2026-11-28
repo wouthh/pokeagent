@@ -441,3 +441,10 @@ def test_area_matches_the_full_attribute_pointer():
     m.put(g.ram.MAP_ATTRIBUTES, bytes([1, 0, 0, 0x34, 0x12]))
     m.put(g.ram.TILESET, bytes([7]))
     assert g.map_name(m, 0x0999) == "HOME (map 9:153)"
+
+
+def test_find_tables_rejects_a_record_run_cut_off_by_the_rom_end():
+    rom = bytearray(0x8000)
+    rom[-64] = 1
+    rom[-32] = 2
+    assert find_tables(bytes(rom)) is None
