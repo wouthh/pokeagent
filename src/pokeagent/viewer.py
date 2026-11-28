@@ -53,13 +53,13 @@ class Viewer:
 
     def _run(self, scale: int, ready: threading.Event) -> None:
         signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
-        import tkinter  # here, so a Python without Tk still runs headless and serves the web page
-
-        from PIL import ImageTk
-
         try:
+            import tkinter  # here, so a Python without Tk still runs headless and serves the web page
+
+            from PIL import ImageTk
+
             root = tkinter.Tk()
-        except tkinter.TclError as e:
+        except Exception as e:  # no Tk (ImportError) or no display (TclError): report it instead of hanging init
             self._error = e
             self.closed.set()
             ready.set()

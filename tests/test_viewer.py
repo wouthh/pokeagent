@@ -1,4 +1,5 @@
 import json
+import sys
 from io import BytesIO
 from types import SimpleNamespace
 from urllib.error import HTTPError
@@ -72,3 +73,9 @@ def test_keys_hold_game_boy_buttons():
     assert keys == {"up", "a"}
     assert viewer.held(keys, "X", False) == {"up"}  # with Shift held the keysym is upper case
     assert viewer.held(keys, "q", True) == keys  # not a game key
+
+
+def test_missing_tk_is_reported_not_hung(monkeypatch):
+    monkeypatch.setitem(sys.modules, "tkinter", None)  # makes `import tkinter` raise ImportError
+    with pytest.raises(RuntimeError, match="cannot open the game window"):
+        viewer.Viewer()
