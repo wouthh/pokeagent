@@ -38,6 +38,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="RUN",
         help="start from another run's latest game (its ROM; that run does not change) instead of power-on",
     )
+    play.add_argument(
+        "--sav",
+        type=Path,
+        help="start --rom's cartridge with this in-game save (a .sav from any emulator; read, never changed)",
+    )
     play.add_argument("--objective", help="what the agent should achieve (default: finish the game)")
     play.add_argument(
         "--success",
@@ -201,12 +206,12 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             if args.command == "play":
-                if bool(args.rom) == bool(args.source):
-                    raise ValueError("give either --rom (a new game) or --from RUN (that run's game)")
+                if bool(args.rom) == bool(args.source) or (args.sav and not args.rom):
+                    raise ValueError("give either --rom (with --sav to continue a save) or --from RUN")
                 source, data_dir = find_run(args.source, args.data_dir) if args.source else (None, None)
                 data_dir = args.data_dir or data_dir or play.default_data_dir()
                 run_dir = play.new_run(
-                    args.rom, args.objective, data_dir, args.success, args.style, args.glitches, source
+                    args.rom, args.objective, data_dir, args.success, args.style, args.glitches, source, args.sav
                 )
             else:
                 run_dir, data_dir = find_run(args.run, args.data_dir)

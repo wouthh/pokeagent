@@ -104,8 +104,8 @@ checkpoint name (from `pokeagent restore <run id>`) to export or view that one i
 `view --keyboard` plays a copy of the run's game in the window: arrow keys move, X is A, Z is B, Enter is START and
 Backspace is SELECT. There is no sound (pokeagent's emulator drops audio). The run does not change; with `--out`, a
 save you make in game is written there as a `.sav` when you close the window (`--force` replaces an existing file).
-To carry on with sound, or to continue from such a `.sav`, open it in another emulator; keep it in its own folder
-next to a copy of the ROM, so it cannot replace a save of yours with the same name.
+To carry on with sound, open such a `.sav` in another emulator; keep it in its own folder next to a copy of the ROM,
+so it cannot replace a save of yours with the same name. `play --sav` lets the agent continue it.
 
 `--web [HOST:]PORT` on `play`, `resume` and `view` serves a read-only page with the live game screen (about 10
 pictures a second), the last action and the run panel; it has no controls. By default only this machine can open
@@ -142,10 +142,13 @@ three side quests. `--style direct` pursues the objective by the shortest route 
 the brief names the Mew glitch, MissingNo. and item duplication and arbitrary code execution with item 8F. A
 glitch can reach the Hall of Fame check too, as in a glitched speedrun.
 
-`--from RUN` starts a new run from another run's latest game instead of power-on; that run does not change:
+`--from RUN` starts a new run from another run's latest game instead of power-on, and `--rom ROM --sav FILE`
+starts one from an in-game save made in any emulator (the agent picks CONTINUE). Neither the run nor the file
+changes:
 
 ```sh
 uv run pokeagent play --from 20261127-205537 --objective "Train the whole team evenly to level 50"
+uv run pokeagent play --rom red.gb --sav "my red.sav" --objective "Complete the Pokédex"
 uv run pokeagent play --from 20261127-205537 --glitches \
   --objective "Raise a Tauros with Smogon's RBY OU set: its moves, maximum stat exp and good DVs"
 ```

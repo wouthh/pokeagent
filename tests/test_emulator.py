@@ -107,3 +107,11 @@ def test_stalled_worker_times_out_while_writing():
         e.load_state(b"\0" * 1_000_000)  # larger than the pipe buffer; nothing reads it
     assert time.monotonic() - t < 5
     e.close()
+
+
+def test_a_save_file_must_fit_the_cartridge(tmp_path):
+    """dmg-acid2 has no battery RAM, so no save file fits it; the worker refuses to start rather than ignore it."""
+    sav = tmp_path / "x.sav"
+    sav.write_bytes(bytes(0x8000))
+    with pytest.raises(EmulatorError):
+        Emulator(core_path("sameboy"), FIXTURES / "dmg-acid2.gb", options={"sameboy_model": "Game Boy"}, battery=sav)

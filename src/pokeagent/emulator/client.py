@@ -33,12 +33,17 @@ class Emulator:
         options: Mapping[str, str] | None = None,
         log: Path | None = None,
         timeout: float = 60,
+        battery: Path | None = None,
     ):
+        """`battery` is a .sav file to start the cartridge with (read-only; the file itself never changes)."""
         sandbox.ensure()
         self.timeout = timeout
         rom_in = "/in/rom" + rom.suffix.lower()
         binds = {"/in/core.so": core, rom_in: rom}
         args = ["/in/core.so", rom_in, json.dumps(dict(options or {}))]
+        if battery:
+            binds["/in/battery.sav"] = battery
+            args.append("/in/battery.sav")
         stderr = log.open("ab") if log else subprocess.DEVNULL
         try:
             self._proc = sandbox.spawn(

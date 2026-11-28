@@ -683,7 +683,7 @@ def test_a_run_can_start_from_another_runs_game(rom_path, tmp_path):
     run_dir = new_run(None, "train the team", tmp_path, style="direct", glitches=True, source=source)
     meta = json.loads((run_dir / "run.json").read_text())
     assert (meta["from"], meta["style"], meta["glitches"], meta["variety"], meta["check"]) == (
-        source.name,
+        f"run {source.name}",
         "direct",
         True,
         None,
@@ -692,6 +692,24 @@ def test_a_run_can_start_from_another_runs_game(rom_path, tmp_path):
     assert latest_state(run_dir) == b"the game" and meta["rom"] == str(rom_path.resolve())
     with pytest.raises(ValueError, match="unknown style"):
         new_run(rom_path, None, tmp_path / "x", style="speedrun")
+
+
+def test_a_run_can_start_from_a_save_file(game, rom_path, tmp_path):
+    gen1, emu, bedroom = game
+    emu.load_state(bedroom)
+    assert gen1.save_game(emu)
+    sram = emu.save_ram()
+    sav = tmp_path / "mine.sav"
+    sav.write_bytes(sram)
+    run_dir = new_run(rom_path, "train the team", tmp_path / "data", sav=sav)
+    assert json.loads((run_dir / "run.json").read_text())["from"] == "save file mine.sav"
+    assert sav.read_bytes() == sram  # the file itself never changes
+    with Emulator(core_path(CORE), rom_path, options=CORE_OPTIONS) as fresh:
+        fresh.load_state(latest_state(run_dir))
+        assert fresh.save_ram() == sram  # the run's game starts with the save in the cartridge
+    sav.write_bytes(sram[:0x3000] + bytes([sram[0x3000] ^ 1]) + sram[0x3001:])
+    with pytest.raises(ValueError, match="not a whole Red/Blue save"):
+        new_run(rom_path, None, tmp_path / "data2", sav=sav)
 
 
 def test_every_action_saves_the_recovery_state_and_a_restart_loads_it(tmp_path):
