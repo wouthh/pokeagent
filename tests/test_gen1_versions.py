@@ -95,6 +95,13 @@ def test_yellow_boots_to_the_bedroom_and_walks_out(yellow_game):
     assert not layout_problems(emu.read, RAM_LAYOUTS["yellow"]) and layout_problems(emu.read, RAM_LAYOUTS["red-blue"])
 
 
+def test_a_yellow_hack_with_another_title_is_still_yellow(find_rom):
+    rom = bytearray(find_rom("Pokemon Yellow.gbc").read_bytes())
+    rom[0x134:0x143] = b"POKEMON HACK".ljust(15, b"\0")
+    adapter = Gen1(bytes(rom))
+    assert adapter.yellow and adapter.layout == "yellow" and adapter.STARTERS == {0x54: (0x17,)}
+
+
 def test_the_first_state_read_corrects_a_wrong_layout_guess(yellow_game):
     gen1, emu, bedroom = yellow_game
     emu.load_state(bedroom)
