@@ -155,12 +155,12 @@ class Memory:
 
 def fake_adapter(layout: str = "gold-silver") -> Gen2:
     g = object.__new__(Gen2)
-    g.known, g.crystal, g.layout, g.layout_checked, g.first_tm, g._areas = (
+    g.known, g.crystal, g.layout, g.layout_checked, g.tm_items, g._areas = (
         True,
         layout == "crystal",
         layout,
         True,
-        0xBF,
+        list(range(191, 241)) + list(range(243, 250)),  # TM01-TM50, then HM01-HM07 after unused ids
         {},
     )
     g.ram = type("Ram", (), RAM_LAYOUTS[layout])
@@ -200,6 +200,7 @@ def started_game(layout: str = "gold-silver") -> Memory:
     m.put(r["NUM_KEY_ITEMS"], bytes([2, 7, 8, 0xFF]))
     m.put(r["NUM_BALLS"], bytes([1, 2, 6, 0xFF]))
     m.put(r["TMHM"] + 2, bytes([3]))  # three of the third TM
+    m.put(r["TMHM"] + 56, bytes([1]))  # HM07, the last slot
     m.put(r["DEX_OWNED"], bytes([0b1111, 0, 0] + [0] * 28 + [0xFF]))  # the last byte's high bits are not Pokémon
     m.put(r["DEX_SEEN"], bytes([0xFF]))
     m.put(r["TIME_OF_DAY"], bytes([2]))
@@ -233,7 +234,8 @@ def test_state_decodes_gen2_structs():
         {"item": "ITEM7", "qty": 1},
         {"item": "ITEM8", "qty": 1},
         {"item": "ITEM2", "qty": 6},
-        {"item": "ITEM193", "qty": 3},  # TM03 when TM01 is item 191 (first_tm 0xBF = 191)
+        {"item": "ITEM193", "qty": 3},  # TM03 when TM01 is item 191
+        {"item": "ITEM249", "qty": 1},  # HM07: unused ids sit between TM50 and HM01
     ]
     assert state["battle"] is None
 
@@ -421,3 +423,21 @@ def test_save_game_and_save_complete(game):
     sram = emu.save_ram()
     assert gen2.save_complete(sram) and len(sram) == 0x8000
     assert gen2.decode(sram[0x200B : 0x200B + 8]) == gen2.state(emu)["player_name"]
+
+
+def test_area_matches_the_full_attribute_pointer():
+    g = fake_adapter()
+    rom = bytearray(0x4000)
+    rom[0x100:0x106] = bytes([1, 7, 0, 0x34, 0x99, 3])  # decoy: same low byte, other high byte
+    rom[0x200:0x206] = bytes([1, 7, 0, 0x34, 0x12, 2])  # bank, tileset, environment, pointer, landmark 2
+    rom[0x300 + 8 : 0x300 + 12] = bytes([0, 0, 0x00, 0x03])  # landmark 2: name pointer 0x0300... (see below)
+    g.rom, g.landmarks = bytes(rom), (0, 0x300)
+    g._offset = lambda addr: addr[1]
+    g.decode = lambda raw: raw.decode("latin-1")
+    rom[0x300 + 8 + 2 : 0x300 + 8 + 4] = (0x400).to_bytes(2, "little")
+    rom[0x400:0x405] = b"HOME\x50"
+    g.rom = bytes(rom)
+    m = Memory()
+    m.put(g.ram.MAP_ATTRIBUTES, bytes([1, 0, 0, 0x34, 0x12]))
+    m.put(g.ram.TILESET, bytes([7]))
+    assert g.map_name(m, 0x0999) == "HOME (map 9:153)"
