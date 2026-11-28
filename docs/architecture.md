@@ -214,9 +214,9 @@ and `gen2_crystal_map_names.txt` hold only pret's map constant names.
   accurate clock keeps checkpoints and fixtures deterministic). A game started from a `--sav` has no `.rtc` file: the
   clock starts at a fixed Sunday morning on emulated time and Continue shows no clock prompt (checked for Gold and
   Crystal).
-- **Memory.** The game state is in WRAM bank 1; the worker's `read` shows whichever bank SVBK selects at D000-DFFF, so
-  `state` reads the bank-1 values only while FF70 & 7 is 0 or 1 (title screens map banks 5 and 6). Banks 2-7 are
-  readable at 0x10000 (nothing here needs them). Money is binary big-endian, not BCD; the party struct is 0x30 bytes
+- **Memory.** The game state is in WRAM bank 1. SameBoy maps D000-DFFF to bank 1 whatever SVBK (FF70) selects (checked
+  over 4,000 frames: D000 equalled bank 1 in all 211 Crystal samples where SVBK was 5 or 6 and the banks differed), so
+  `state` needs no bank guard; banks 2-7 are fixed at 0x10000 (nothing here needs them). Money is binary big-endian, not BCD; the party struct is 0x30 bytes
   with a held item and five stats and no types (the species' base data has them).
 - **State** has the Gen 1 shape plus `item` and `stat_names` on party members, `time_of_day`, Johto and Kanto badges
   (`badges` is their total out of 16, `badge_bits` is `johto | kanto << 8`) and `map_id = group << 8 | number`. The bag
@@ -898,3 +898,9 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
   cell across a level boundary counts as a new screen. A success check can use none of the builtin observations (they
   are Pokémon's), so only the user's judgement or an agent claim ends a generic run. Issues 44 and 45 (Radical Red,
   ROWE) are played this way.
+- **2026-11-28: No WRAM bank guard in the Gen 2 state.** The first Gen 2 adapter read the D000 range only while FF70 & 7
+  was 0 or 1, on the assumption that D000 follows SVBK. It does not: SameBoy's memory map points D000 at bank 1 for
+  every SVBK value, and the game switches banks 5 and 6 in for a few frames (opening the START menu, a battle start),
+  so the guard made a running game read as "no game in progress" with `in_battle` flickering. The guard is removed; the
+  state reads are the same for any SVBK. Ruled out: reading the core's whole SYSTEM_RAM (it has all 8 banks, but D000
+  already is bank 1) and keeping the last good state (it would hide a real power-on).

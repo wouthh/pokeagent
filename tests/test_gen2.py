@@ -251,13 +251,15 @@ def test_state_battle_kind_and_money_is_not_bcd():
     assert state["screen"]["mode"] == "battle"
 
 
-def test_game_state_is_not_read_from_the_wrong_wram_bank():
+def test_game_state_does_not_depend_on_the_selected_wram_bank():
+    # SameBoy maps D000 to bank 1 whatever SVBK says, and the game switches banks 2-7 in for a few frames (a battle
+    # start): a running game must keep reading as a running game.
     g, m = fake_adapter(), started_game()
-    m.mem[0xFF70] = 5  # the title screen maps bank 5 at D000
-    state = g.state(m)
-    assert not state["in_game"] and state["party"] == [] and state["bag"] == [] and state["money"] == 0
-    m.mem[0xFF70] = 0xF8  # bank 0 selects bank 1; the upper bits read as 1
-    assert g.state(m)["in_game"]
+    steady = g.state(m)
+    for svbk in (0, 1, 2, 5, 6, 7, 0xF8, 0xFD):
+        m.mem[0xFF70] = svbk
+        assert g.state(m) == steady
+    assert steady["in_game"]
 
 
 def test_power_on_noise_is_not_a_game():
@@ -505,3 +507,16 @@ def test_naming_screen_shows_its_grid(find_rom):
                 assert gen2.advance_text(emu)["outcome"] == "menu"  # never types into the grid
                 return
         raise AssertionError("no naming screen")
+
+
+def test_a_running_game_never_reads_as_no_game_while_banks_switch(game):
+    gen2, emu, start = game
+    emu.load_state(start)
+    banks = set()
+    emu.run(["start"], 4)  # opening the START menu: Crystal switches WRAM bank 6 in for about 20 frames
+    for _ in range(100):
+        emu.run([], 1)
+        banks.add(emu.read(0xFF70, 1)[0] & 7)
+        state = gen2.state(emu)
+        assert state["in_game"] and state["player_name"] and state["map_id"] == 0x1807
+    assert not gen2.crystal or banks & {2, 3, 4, 5, 6, 7}  # the test saw the switch it is about
