@@ -3,8 +3,8 @@
 Progress is the adapter's `progress_score` rising above its best so far: a new tile, map, Pokédex entry, level,
 experience or badge counts, so grinding is progress and pacing the same tiles or bumping into a wall is not. In a
 battle, the enemy's HP falling below its lowest so far in that battle counts too, and so does its next party member
-coming out; a battle where both sides just heal is not progress. Every
-`STEP` completed actions without progress climb one level:
+coming out; meeting a foe, or both sides just healing, is not progress. Every `STEP` completed actions without
+progress climb one level:
 
 1. a notice in the action result, with knowledge that may bear on it;
 2. the action tools refuse until the agent calls `reflect`;
@@ -54,7 +54,7 @@ class Ladder:
         if battle := state.get("battle"):
             pos, hp = battle["enemy_pos"], battle["enemy_hp"]
             if self.foe is None or self.foe[0] != pos or hp < self.foe[1]:
-                progress = True
+                progress |= self.foe is not None  # meeting a foe is not progress; damaging it or its next one is
                 self.foe = (pos, hp)
         else:
             self.foe = None
