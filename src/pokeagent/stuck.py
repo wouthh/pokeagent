@@ -1,7 +1,8 @@
 """The stuck ladder: actions without progress escalate from a notice to a pause of the run.
 
 Progress is the adapter's `progress_score` rising above its best so far: a new tile, map, Pokédex entry, level,
-experience or badge counts, so grinding is progress and pacing the same tiles or bumping into a wall is not. In a
+experience or badge counts, so grinding is progress and pacing the same tiles or bumping into a wall is not. For a
+game without an adapter it is a screen not seen before on the timeline (`frame_id`, a coarse picture hash). In a
 battle, the enemy's HP falling below its lowest so far in that battle counts too, and so does its next party member
 coming out; meeting a foe, or both sides just healing, is not progress. Every `STEP` completed actions without
 progress climb one level:
@@ -17,6 +18,7 @@ Progress resets the ladder. It lives in the runner, so it starts over when a run
 
 import time
 
+PROGRESS = "a new tile, map, level, experience, Pokédex entry or badge, or damage to the enemy in a battle"
 STEP = 40  # actions without progress per level
 TOP = 5
 
@@ -46,7 +48,7 @@ class Ladder:
     def observe(self, state: dict, maps: int) -> int:
         """Record one completed action that left the game in `state` (in game), with `maps` maps visited on this
         timeline. Returns the level it climbed to, else 0."""
-        self.tiles.add((state["map_id"], state["x"], state["y"]))
+        self.tiles.add(state["frame_id"] if "frame_id" in state else (state["map_id"], state["x"], state["y"]))
         score = self.adapter.progress_score(state, maps, len(self.tiles))
         before = self.level
         progress = self.best is None or score > self.best
@@ -67,10 +69,11 @@ class Ladder:
         return self.level if self.level > before else 0
 
 
-def describe(level: int, since: int) -> str:
+def describe(level: int, since: int, adapter=None) -> str:
+    progress = getattr(adapter, "PROGRESS", PROGRESS)
     return (
-        "pokeagent: no progress (a new tile, map, level, experience, Pokédex entry or badge, or damage to the enemy"
-        f" in a battle) in your last {since} actions, stuck level {level} of {TOP}: {CONSEQUENCES[level]}."
+        f"pokeagent: no progress ({progress}) in your last {since} actions, stuck level {level} of {TOP}:"
+        f" {CONSEQUENCES[level]}."
         " Step back: research it (knowledge_search, WebSearch), read memory, build a macro or observation,"
         " request development, or try a different approach."
     )

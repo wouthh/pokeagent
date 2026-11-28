@@ -20,6 +20,8 @@ first use case, not an architectural constraint. Design and decisions: [docs/arc
     `games/gen1_tables.py` scans a ROM for its name and collision tables; the map-name files hold only constants.
     `games/pokemon_gen2.py` and `games/gen2_tables.py` are the same for Gold, Silver, Crystal and their engine hacks
     (`gen2_*_map_names.txt`: constants only).
+  - `games/generic.py`: the adapter of last resort for any GB, GBC or GBA cartridge with a valid header (no game
+    knowledge; novelty as progress; `press` only).
   - `games/pokemon_gen3.py`: the Ruby, Sapphire, Emerald, FireRed and LeafGreen adapter (mGBA core); `games/gen3_tables.py`
     is its text encoding and ROM name-table scanner.
   - `server.py`: the `game` MCP server (token and Host checks, tools, budgets). `play.py`: runs, the live `Game`,

@@ -11,15 +11,19 @@
   `observations(state)`, `fingerprint(state)` and `progress_score(state, maps_visited, tiles_visited)`;
 - controller-only macros `press`, `walk`, `walk_to`, `advance_text` and `grid(emu)` (with `render` and `path`), and
   `save_game(emu)` / `save_complete(sram)` for the in-game save.
+
+`generic.Generic` follows the same contract for a cartridge no game adapter knows: its state holds only `in_game`
+(False) and `frame_id`, which the runner reads as "nothing but screens to go on".
 """
 
 import hashlib
 
+from pokeagent.games.generic import Generic
 from pokeagent.games.pokemon_gen1 import Gen1
 from pokeagent.games.pokemon_gen2 import Gen2
 from pokeagent.games.pokemon_gen3 import Gen3
 
-ADAPTERS = (Gen1, Gen2, Gen3)
+ADAPTERS = (Gen1, Gen2, Gen3, Generic)  # Generic last: it takes any GB, GBC or GBA cartridge the others refuse
 
 
 def identify(rom: bytes):
@@ -27,5 +31,4 @@ def identify(rom: bytes):
     for adapter in ADAPTERS:
         if adapter.recognises(rom):
             return adapter(rom)
-    titles = ", ".join(title for adapter in ADAPTERS for title in adapter.ROMS.values())
-    raise ValueError(f"unsupported ROM (sha1 {hashlib.sha1(rom).hexdigest()}); supported: {titles}")
+    raise ValueError(f"unsupported ROM (sha1 {hashlib.sha1(rom).hexdigest()}): not a GB, GBC or GBA cartridge")

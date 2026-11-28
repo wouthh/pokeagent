@@ -34,7 +34,7 @@ from pokeagent.capabilities import CapabilityError
 from pokeagent.emulator.client import RequestRefused
 from pokeagent.extension_host import API_VERSION
 
-EFFECTS = ("position", "map", "party", "bag", "money", "battle", "menu")
+EFFECTS = ("position", "map", "party", "bag", "money", "battle", "menu", "screen")
 BUTTONS = ("a", "b", "start", "select", "up", "down", "left", "right")
 LIMITS = {"RLIMIT_AS": 1 << 30, "RLIMIT_NPROC": 16, "RLIMIT_FSIZE": 8 << 20, "RLIMIT_NOFILE": 64, "RLIMIT_CPU": 120}
 MAX_LINE = 64 << 10  # one protocol line from the host
@@ -278,7 +278,7 @@ class Runner:
             case "observe":
                 return game._observations()[args["name"]]
             case "screen_text":
-                return game.adapter.state(game)["screen_text"]
+                return game.adapter.state(game).get("screen_text", [])
             case "read":
                 length = args.get("length", 1)
                 if not isinstance(length, int) or not 1 <= length <= capabilities.MAX_READ:

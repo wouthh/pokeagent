@@ -294,14 +294,17 @@ class Game:
             crop = self.adapter.grid(self).render((after["x"], after["y"]), radius=4)
             lines.append(f"Nearby ({LEGEND}):\n{crop}")
         if self.viewer:
-            self.viewer.status = f"{name}: {outcome} | {after['map']} ({after['x']},{after['y']})"
-        mode_changed = before["screen"]["mode"] != after["screen"]["mode"]
-        return "\n".join(lines), self.png() if mode_changed else None
+            where = f" | {after['map']} ({after['x']},{after['y']})" if "map" in after else ""
+            self.viewer.status = f"{name}: {outcome}{where}"
+        # without an adapter's state the screenshot is all the agent has: every result carries one
+        shot = "frame_id" in after or before["screen"]["mode"] != after["screen"]["mode"]
+        return "\n".join(lines), self.png() if shot else None
 
     def _do(self, name: str, args: dict) -> str:
         """One builtin action. Also the step runner of macros, whose steps may leave out optional arguments."""
         adapter = self.adapter
-        if name in ("walk", "walk_to") and not adapter.state(self)["in_game"]:
+        state = adapter.state(self)
+        if name in ("walk", "walk_to") and not state["in_game"] and "frame_id" not in state:
             raise ValueError("no game is in progress yet; use press and advance_text until one is")
         match name:
             case "press":
@@ -360,6 +363,8 @@ def new_run(
             raise ValueError(f"run {source.name} has no game to start from yet")
     data = rom.read_bytes()
     adapter = identify(data)  # refuses unsupported ROMs
+    if not adapter.STARTERS:  # the natural style's rules are Pokémon's
+        style = "direct"
     if sav:
         if not adapter.save_complete(saved := sav.read_bytes()):
             raise ValueError(f"{sav} is not a whole in-game save of {adapter.title} (size and the game's checksum)")
@@ -567,9 +572,9 @@ class Runner:
 
     def _watch(self, saved: bytes) -> tuple[int, str]:
         state = self.game.progress_state()
-        if not state["in_game"]:
+        if not state["in_game"] and "frame_id" not in state:
             return 0, ""
-        badge = self._milestones(state)
+        badge = "map_id" in state and self._milestones(state)
         climbed = self.ladder.observe(state, len(self._maps))
         if badge:  # after the ladder took the badge into its best score, so the checkpoint is tagged with it
             self.checkpoint(f"badge {state['badges']}", saved)
@@ -579,8 +584,8 @@ class Runner:
         self.memory.event("stuck", {"level": climbed, "since": self.ladder.since}, self.number)
         self.show(f"session {self.number} (play)")  # after the event: the panel reads the latest stuck level
         self.log("stuck", f"level {climbed} after {self.ladder.since} actions without progress")
-        notice = stuck.describe(climbed, self.ladder.since)
-        if hits := self.memory.search(state["map"], 3):
+        notice = stuck.describe(climbed, self.ladder.since, self.game.adapter)
+        if hits := "map" in state and self.memory.search(state["map"], 3):
             notice += "\nKnowledge that may bear on this:\n" + "\n".join(describe_knowledge(e) for e in hits)
         return climbed, notice
 
@@ -1177,6 +1182,8 @@ def _where(run_dir: Path) -> str:
             state = adapter.state(emu)
     except (OSError, ValueError, EmulatorError) as e:  # a moved or changed ROM should not hide the other runs
         return f"cannot read its game: {e}"
+    if "frame_id" in state:
+        return "no adapter for this game"
     if not state["in_game"]:
         return "before the game starts (title screen or power-on)"
     party = state["party"]
