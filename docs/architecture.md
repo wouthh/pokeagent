@@ -80,7 +80,7 @@ read from the user's ROM at runtime, so no game text is stored in the repository
 
 - **Version from the ROM, not a sha1.** `gen1_tables.find_tables(rom)` locates every table by facts in the ROM (the
   one run of 190 ten-byte name records, the strings after POUND and MASTER BALL, the pointers to NORMAL, FIGHTING and
-  FLYING, the first rows of the tile-pair and ledge tables). `recognises` is true when all six are found, so Blue Kaizo
+  FLYING, the row shapes of the tile-pair and ledge tables). `recognises` is true when all six are found, so Blue Kaizo
   works with no entry; `ROMS` only names known dumps (an unknown one is "Gen 1 ROM hack (header title X)"). Yellow
   (header title) selects its own layout, `STARTERS` (Pikachu only), side quests, map names and colour core options.
 - **Layout probe.** `RAM_LAYOUTS` holds Red/Blue's WRAM addresses and Yellow's (one lower from `WALK_COUNTER` on).
