@@ -200,6 +200,7 @@ class Game:
         }
 
     def _decode(self, spec: dict):
+        self.check_ram(spec["address"], spec["length"])
         return capabilities.decode(spec, self.emu.read(spec["address"], spec["length"]), self.adapter.decode)
 
     def _observations(self) -> dict:

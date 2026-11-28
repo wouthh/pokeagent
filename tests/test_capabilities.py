@@ -35,12 +35,13 @@ def test_observations_validate_and_decode():
         observation(decode="bit"),
         observation(decode="u8", bit=1),
         observation(decode="u8", length=65),
-        observation(decode="u8", address=0x10000),
+        observation(decode="u8", address=0x1_0000_0000),
         observation(decode="u8", name="Bad Name"),
         observation(decode="u8", name="badges"),
         observation(decode="u8", description=""),
         observation(decode="u8", extra=1),
     ]
+    assert check_observation(observation(decode="u8", address=0x02000000), BUILTIN)["address"] == 0x02000000
     for spec in bad:
         with pytest.raises(CapabilityError):
             check_observation(spec, BUILTIN)
