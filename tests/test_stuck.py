@@ -27,3 +27,28 @@ def test_notices_say_what_happens():
     assert "holds" not in describe(1, STEP) and "reflect(analysis, plan)" in describe(2, 2 * STEP)
     assert "pauses for the user" in describe(5, 5 * STEP)
     assert "level 3 of 5" in brief(3, 3 * STEP) and "4 goes back" in brief(3, 3 * STEP)
+
+
+def fight(hp, pos=0):
+    return {**state(), "battle": {"enemy_hp": hp, "enemy_pos": pos}}
+
+
+def test_damage_dealt_in_a_battle_is_progress_but_healing_back_is_not():
+    ladder = Ladder(Gen1)
+    for i in range(5 * STEP):  # attrition: the enemy's HP keeps falling
+        assert ladder.observe(fight(500 - i), 1) == 0
+    ladder = Ladder(Gen1)
+    ladder.observe(fight(90), 1)
+    climbs = [ladder.observe(fight(100 - 10 * (i % 2)), 1) for i in range(STEP + 1)]  # heals back, never lower
+    assert climbs.count(1) == 1 and ladder.level == 1
+
+
+def test_the_enemys_next_pokemon_counts_and_the_battle_memory_resets():
+    ladder = Ladder(Gen1)
+    ladder.observe(fight(0, pos=0), 1)
+    for _ in range(STEP - 1):
+        ladder.observe(fight(0, pos=0), 1)
+    assert ladder.observe(fight(50, pos=1), 1) == 0 and ladder.since == 0
+    ladder.observe(state(), 1)  # the battle ended
+    assert ladder.foe is None
+    assert ladder.observe(fight(90, pos=1), 1) == 0 and ladder.since == 0  # a new battle starts from scratch

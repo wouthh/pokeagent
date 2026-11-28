@@ -1,7 +1,9 @@
 """The stuck ladder: actions without progress escalate from a notice to a pause of the run.
 
 Progress is the adapter's `progress_score` rising above its best so far: a new tile, map, Pokédex entry, level,
-experience or badge counts, so grinding is progress and pacing the same tiles or bumping into a wall is not. Every
+experience or badge counts, so grinding is progress and pacing the same tiles or bumping into a wall is not. In a
+battle, the enemy's HP falling below its lowest so far in that battle counts too, and so does its next party member
+coming out; a battle where both sides just heal is not progress. Every
 `STEP` completed actions without progress climb one level:
 
 1. a notice in the action result, with knowledge that may bear on it;
@@ -32,6 +34,7 @@ class Ladder:
         self.adapter = adapter
         self.tiles: set[tuple[int, int, int]] = set()
         self.best: int | None = None
+        self.foe: tuple[int, int] | None = None  # the enemy's party position and lowest HP in the current battle
         self.since = 0  # completed actions since the last progress
         self.id = time.time_ns()  # scores of different instances are not comparable (tiles restart on resume)
 
@@ -45,8 +48,18 @@ class Ladder:
         self.tiles.add((state["map_id"], state["x"], state["y"]))
         score = self.adapter.progress_score(state, maps, len(self.tiles))
         before = self.level
-        if self.best is None or score > self.best:
-            self.best, self.since = score, 0
+        progress = self.best is None or score > self.best
+        if progress:
+            self.best = score
+        if battle := state.get("battle"):
+            pos, hp = battle["enemy_pos"], battle["enemy_hp"]
+            if self.foe is None or self.foe[0] != pos or hp < self.foe[1]:
+                progress = True
+                self.foe = (pos, hp)
+        else:
+            self.foe = None
+        if progress:
+            self.since = 0
             return 0
         self.since += 1
         return self.level if self.level > before else 0
@@ -54,9 +67,10 @@ class Ladder:
 
 def describe(level: int, since: int) -> str:
     return (
-        f"pokeagent: no progress (a new tile, map, level, experience, Pokédex entry or badge) in your last {since}"
-        f" actions, stuck level {level} of {TOP}: {CONSEQUENCES[level]}. Step back: research it (knowledge_search,"
-        " WebSearch), read memory, build a macro or observation, request development, or try a different approach."
+        "pokeagent: no progress (a new tile, map, level, experience, Pokédex entry or badge, or damage to the enemy"
+        f" in a battle) in your last {since} actions, stuck level {level} of {TOP}: {CONSEQUENCES[level]}."
+        " Step back: research it (knowledge_search, WebSearch), read memory, build a macro or observation,"
+        " request development, or try a different approach."
     )
 
 
