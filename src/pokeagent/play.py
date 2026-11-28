@@ -930,11 +930,24 @@ def _states(run_dir: Path, memory: Memory, checkpoint: str | None) -> list[tuple
     return found
 
 
-def view(run_dir: Path, data_dir: Path, checkpoint: str | None = None) -> None:
-    """Show a run's game in a window, at its latest state or a checkpoint, with the status panel. Nothing is played or
-    changed; returns when the window is closed."""
-    from pokeagent.viewer import Viewer
+def _viewer(watch: bool, web: tuple[str, int] | None):
+    """(what the game and runner show things on, the web server or None): the Tk window when `watch`, the web page at
+    `web` (host, port); both show the same object. (None, None) for neither."""
+    from types import SimpleNamespace
 
+    from pokeagent import viewer
+
+    shown = viewer.Viewer() if watch else SimpleNamespace(frame=None, status="", panel="") if web else None
+    return shown, viewer.serve(shown, web) if web else None
+
+
+def view(
+    run_dir: Path, data_dir: Path, checkpoint: str | None = None, watch: bool = True, web: tuple[str, int] | None = None
+) -> None:
+    """Show a run's game, at its latest state or a checkpoint, with the status panel, in the window and/or on the web
+    page. Nothing is played or changed; returns when the window is closed or on Ctrl-C."""
+    if not (watch or web):
+        raise ValueError("nothing to show it in: drop --no-watch or pass --web")
     meta, rom, _ = _run_rom(run_dir)
     with contextlib.closing(open_memory(run_dir, data_dir)) as memory:
         found = _states(run_dir, memory, checkpoint)[:1]
@@ -944,11 +957,63 @@ def view(run_dir: Path, data_dir: Path, checkpoint: str | None = None) -> None:
             emu.load_state(found[0][1])
         emu.run([], 1)  # draw the loaded state
         frame = emu.frame()
-    viewer = Viewer()
+    viewer, page = _viewer(watch, web)
     viewer.frame, viewer.panel = frame, panel
-    viewer.status = f"{run_dir.name}: {found[0][0] if found else 'power-on'} (viewing only; close the window to quit)"
-    while not viewer.closed.wait(0.2):  # a short wait keeps Ctrl-C working
-        pass
+    quit = "close the window or press Ctrl-C" if watch else "press Ctrl-C in the terminal"
+    viewer.status = f"{run_dir.name}: {found[0][0] if found else 'power-on'} (viewing only; {quit} to quit)"
+    closed = viewer.closed if watch else threading.Event()
+    try:
+        with contextlib.suppress(KeyboardInterrupt):
+            while not closed.wait(0.2):  # a short wait keeps Ctrl-C working
+                pass
+    finally:
+        if page:
+            page.shutdown()
+
+
+def play_by_hand(
+    run_dir: Path,
+    data_dir: Path,
+    checkpoint: str | None = None,
+    out: Path | None = None,
+    force: bool = False,
+    web: tuple[str, int] | None = None,
+) -> str:
+    """Play a copy of the run's game yourself with the keyboard (`viewer.KEYS`), from its latest state or a checkpoint,
+    until the window closes or Ctrl-C. The run does not change. With `out`, an in-game save you made is written there
+    as a .sav; returns what was kept. No sound: the emulator worker discards audio."""
+    if out and out.exists() and not force:
+        raise ValueError(f"{out} exists; pass --force to replace it or choose another --out")
+    from pokeagent.viewer import KEY_HELP
+
+    meta, rom, adapter = _run_rom(run_dir)
+    with contextlib.closing(open_memory(run_dir, data_dir)) as memory:
+        label, state = (_states(run_dir, memory, checkpoint) or [("power-on", None)])[0]
+    viewer, page = _viewer(True, web)
+    keep = f"save in game to keep it in {out.name}" if out else "nothing is kept; --out keeps your in-game save"
+    viewer.status = f"{run_dir.name}: {label}, a copy ({keep}). Close the window to stop."
+    viewer.panel = KEY_HELP
+    try:
+        with Emulator(core_path(meta["core"]), rom, options=meta["core_options"]) as emu:
+            if state:
+                emu.load_state(state)
+            before, tick, due = emu.save_ram(), 2 / emu.info["fps"], time.monotonic()
+            with contextlib.suppress(KeyboardInterrupt):
+                while not viewer.closed.is_set():
+                    emu.run(sorted(viewer.buttons), 2)  # two frames per step: the window redraws at 30 fps
+                    viewer.frame = emu.frame()
+                    due = max(due + tick, time.monotonic() - tick)  # after a stall, carry on rather than rush
+                    time.sleep(max(0.0, due - time.monotonic()))
+            sram = emu.save_ram()
+    finally:
+        if page:
+            page.shutdown()
+    if out is None:
+        return "nothing kept"
+    if sram == before or not adapter.save_complete(sram):
+        return "you did not save in game; nothing written"
+    write_atomic(out, sram)
+    return f"wrote your in-game save to {out}"
 
 
 def export_save(run_dir: Path, data_dir: Path, out: Path, checkpoint: str | None = None, force: bool = False) -> str:
@@ -981,6 +1046,7 @@ def play(
     model: str | None = None,
     effort: str | None = None,
     watch: bool = False,
+    web: tuple[str, int] | None = None,
     speed: float | None = None,
     development: dict | None = None,
 ) -> str:
@@ -994,11 +1060,7 @@ def play(
             settle = f"; settle it with `pokeagent objective confirm|reject {run_dir.name}`"
             raise ValueError(f"run {run_dir.name} is {status} ({why})" + (settle if status == "claimed" else ""))
         version = preflight()
-        viewer = None
-        if watch:
-            from pokeagent.viewer import Viewer
-
-            viewer = Viewer()
+        viewer, page = _viewer(watch, web)
         start = partial(Emulator, core_path(meta["core"]), rom, options=meta["core_options"])
         game = Game(
             start(), adapter, speed, viewer, start, Registry(memory), data_dir / "library", run_dir / "tkv.json"
@@ -1027,3 +1089,5 @@ def play(
             return reason
         finally:
             game.emu.close()
+            if page:
+                page.shutdown()

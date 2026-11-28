@@ -10,6 +10,18 @@ from pathlib import Path
 from pokeagent import __version__
 
 
+def web_address(text: str) -> tuple[str, int]:
+    """[HOST:]PORT for --web; the host defaults to this machine only."""
+    host, _, port = text.rpartition(":")
+    return host or "127.0.0.1", int(port)
+
+
+WEB_HELP = (
+    "also show the game on a web page at [HOST:]PORT, e.g. 8765 (this machine only) or 0.0.0.0:8765 (other devices"
+    " on your network, if the firewall lets them in)"
+)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pokeagent",
@@ -39,6 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
             default=True,
             help="show the game in a window (default); --no-watch plays without one",
         )
+        p.add_argument("--web", type=web_address, metavar="[HOST:]PORT", help=WEB_HELP)
         p.add_argument("--watch-speed", type=float, help="emulation speed, a multiple of real time (default: uncapped)")
         p.add_argument("--dev-share", type=float, default=0.3, help="most of the run's tokens development may use")
         p.add_argument("--dev-attempts", type=int, default=2, help="development sessions per tool")
@@ -61,6 +74,13 @@ def build_parser() -> argparse.ArgumentParser:
     view = commands.add_parser("view", help="show a run's game in a window without playing it")
     view.add_argument("run", help="run id or run folder")
     view.add_argument("checkpoint", nargs="?", help="checkpoint file name (default: the latest state)")
+    view.add_argument("--watch", action=argparse.BooleanOptionalAction, default=True, help="show the window (default)")
+    view.add_argument("--web", type=web_address, metavar="[HOST:]PORT", help=WEB_HELP)
+    view.add_argument(
+        "--keyboard", action="store_true", help="play a copy yourself with the keyboard; the run does not change"
+    )
+    view.add_argument("--out", type=Path, help="with --keyboard: write your in-game save here as a .sav")
+    view.add_argument("--force", action="store_true", help="with --out: replace the file if it exists")
     view.add_argument("--data-dir", type=Path, help="where runs live (default ~/.local/share/pokeagent)")
     export = commands.add_parser("export-sav", help="save a run's game in game and write it as a .sav file")
     export.add_argument("run", help="run id or run folder")
@@ -165,6 +185,8 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 run_dir, data_dir = find_run(args.run, args.data_dir)
             print(f"run {run_dir.name}: log at {run_dir / 'play.log'}")
+            if args.web:
+                print(f"web page at http://{args.web[0]}:{args.web[1]}/", flush=True)
             reason = play.play(
                 run_dir,
                 data_dir,
@@ -172,6 +194,7 @@ def main(argv: list[str] | None = None) -> int:
                 model=args.model,
                 effort=args.effort,
                 watch=args.watch,
+                web=args.web,
                 speed=args.watch_speed,
                 development={
                     "dev_share": args.dev_share,
@@ -190,7 +213,12 @@ def main(argv: list[str] | None = None) -> int:
         try:
             run_dir, data_dir = find_run(args.run, args.data_dir)
             if args.command == "view":
-                play.view(run_dir, data_dir, args.checkpoint)
+                if args.web:
+                    print(f"web page at http://{args.web[0]}:{args.web[1]}/", flush=True)
+                if args.keyboard:
+                    print(play.play_by_hand(run_dir, data_dir, args.checkpoint, args.out, args.force, args.web))
+                else:
+                    play.view(run_dir, data_dir, args.checkpoint, args.watch, args.web)
             else:
                 rom = Path(json.loads((run_dir / "run.json").read_text())["rom"])
                 out = args.out or run_dir / f"{rom.stem}.sav"

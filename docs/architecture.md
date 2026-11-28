@@ -19,7 +19,7 @@ pokeagent play/resume ── orchestrator (trusted, host)
   ├─ capability registry (builtin + declarative + code extensions, versioned, with contracts)
   ├─ memory store (SQLite + FTS5) + run files, timeline-aware
   ├─ stuck detector, policy, budgets, checkpoints, metrics
-  ├─ viewer (Tk: frame + status panel)
+  ├─ viewer (Tk window and read-only web page: frame + status panel; keyboard play on a copy)
   └─ child processes, each in its own bwrap sandbox with minimal mounts:
        live emulator worker   python/venv, package, core .so, ROM (ro); tmpfs
        extension host         python/venv, package, that capability version (ro); tmpfs; no ROM
@@ -86,7 +86,8 @@ text is stored in the repository; `gen1_map_names.txt` holds only the map consta
 
 `pokeagent play --rom PATH [--objective TEXT]` creates a run; `pokeagent resume RUN` continues one where it stopped.
 Both take `--max-sessions`, `--model`, `--effort`, `--watch`/`--no-watch` (the Tk window with the frame, the last
-action and the status panel; on by default) and `--watch-speed` (a multiple of real time; uncapped by default).
+action and the status panel; on by default), `--web [HOST:]PORT` (the same on a read-only web page) and
+`--watch-speed` (a multiple of real time; uncapped by default).
 
 - **Run directory** (`<data dir>/runs/<id>/`, mode 0700): `run.json` (objective, trusted check, ROM path and
   sha1, core and options; written once), `state.json` (session count, last summary and focus), `notes.md`,
@@ -151,8 +152,9 @@ action and the status panel; on by default) and `--watch-speed` (a multiple of r
   timeline, the planned focus, the last five milestones, the last stuck notice, the active capabilities (newest
   first), recent knowledge and the last development cycle. The game window shows the same text in a panel
   under the frame, refreshed at session starts and ends, milestones and stuck notices.
-- `pokeagent view RUN [CHECKPOINT]`: the game window with the latest state (or a checkpoint of the current timeline)
-  and the status panel, without playing. `pokeagent export-sav RUN [CHECKPOINT] [--out PATH] [--force]`: the game
+- `pokeagent view RUN [CHECKPOINT]`: the game window (and/or `--web` page) with the latest state (or a checkpoint of
+  the current timeline) and the status panel, without playing. `--keyboard` plays a copy with the keyboard instead,
+  two frames per step at the core's speed, and `--out` keeps an in-game save made there. `pokeagent export-sav RUN [CHECKPOINT] [--out PATH] [--force]`: the game
   saved in game as a standard `.sav` (see Decisions).
 - `pokeagent stats RUN`: one row per session (mode, end, turns, actions, capability calls and failures, milestones,
   tokens, cache reads, cost, minutes), totals per mode and the development share of tokens. A session without its end event shows as
@@ -545,6 +547,17 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
   existing file is replaced only with `--force`. The worker's `save_ram` op is read-only like `read`.
 - **2026-11-28: The game window is on by default.** A run is meant to be watched; `--no-watch` is for tests and
   headless machines. `pokeagent view` shows a stopped run's game and status without playing it.
+- **2026-11-28: The web page is read-only and local by default.** `viewer.serve` (stdlib `ThreadingHTTPServer`)
+  answers GET for the page, `/frame.png` and `/status.json` only, from the same object the Tk window shows. It binds
+  127.0.0.1 unless `--web` names another host, and refuses requests whose Host header is a DNS name rather than an
+  address or `localhost` (DNS rebinding). There is no login: on the network, anyone who can reach the port sees the
+  game and the run panel, so that stays an explicit choice, and the firewall (here the Wi-Fi interface's `drop` zone)
+  has to admit the port.
+- **2026-11-28: Keyboard play is on a copy, without sound or `.sav` loading.** `view --keyboard` feeds held keys to
+  a fresh sandboxed emulator loaded from the run's state, so the run, its timeline and the agent's knowledge never
+  see human input. Sound would mean carrying audio out of the sandbox and a playback dependency; loading a `.sav`
+  would need a memory-write operation the worker deliberately lacks. Both are what other emulators are for, and
+  `--out` or `export-sav` hands the game over to them.
 - **2026-11-27: Game names come from the user's ROM at runtime,** not from tables in the repository, and the walk grid
   is computed from the map and tileset data in RAM and ROM instead of hand-written maps.
 - **2026-11-27: Timeline-bound context is saved with each checkpoint.** `notes.md` and `state.json` are copied next to
