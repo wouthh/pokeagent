@@ -413,8 +413,9 @@ class Runner:
             for name in CONTEXT_FILES:
                 old.with_suffix(f".{name}").unlink(missing_ok=True)
         identity = {key: self.meta[key] for key in IDENTITY}
-        # best and ladder: the ladder's score and instance, for the stuck level 4 restore
-        data = {"file": path.name, "reason": reason, "best": self.ladder.best, "ladder": self.ladder.id} | identity
+        # progress and ladder: the ladder's progress revision and instance, for the stuck level 4 restore
+        data = {"file": path.name, "reason": reason, "progress": self.ladder.revision, "ladder": self.ladder.id}
+        data |= identity
         self.memory.event("checkpoint", data)
         self.log("checkpoint", f"{path.name} ({reason})")
 
@@ -505,7 +506,7 @@ class Runner:
             (
                 e
                 for e in restorable(self.run_dir, self.memory)
-                if e["data"].get("ladder") == self.ladder.id and e["data"].get("best") == self.ladder.best
+                if e["data"].get("ladder") == self.ladder.id and e["data"].get("progress") == self.ladder.revision
             ),
             None,
         )

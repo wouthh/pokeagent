@@ -35,6 +35,7 @@ class Ladder:
         self.tiles: set[tuple[int, int, int]] = set()
         self.best: int | None = None
         self.foe: tuple[int, int] | None = None  # the enemy's party position and lowest HP in the current battle
+        self.revision = 0  # counts progress events, so a checkpoint says which progress it follows
         self.since = 0  # completed actions since the last progress
         self.id = time.time_ns()  # scores of different instances are not comparable (tiles restart on resume)
 
@@ -59,6 +60,7 @@ class Ladder:
         else:
             self.foe = None
         if progress:
+            self.revision += 1
             self.since = 0
             return 0
         self.since += 1

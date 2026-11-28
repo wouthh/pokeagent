@@ -292,9 +292,9 @@ def test_a_stuck_restore_ignores_checkpoints_of_an_earlier_ladder(tmp_path):
     runner, _, _ = make_runner(tmp_path, [(SessionResult("completed"), None)])
     runner._after_action()
     runner.checkpoint("old ladder")  # as if saved before a resume: same score, another ladder instance
-    best = runner.ladder.best
+    revision = runner.ladder.revision
     runner.ladder = stuck.Ladder(runner.game.adapter)
-    runner.ladder.best = best
+    runner.ladder.revision = revision
     assert runner._restore_progress() is False
     runner.checkpoint("new ladder")
     assert runner._restore_progress() is True
@@ -306,7 +306,7 @@ def test_a_badge_on_the_first_action_is_a_milestone_and_its_checkpoint_carries_t
     runner._after_action()
     assert [e["data"]["text"] for e in runner.memory.events("milestone", limit=-1)][-1] == "badge 1"
     checkpoint = next(e for e in runner.memory.events("checkpoint", limit=-1) if e["data"]["reason"] == "badge 1")
-    assert checkpoint["data"]["best"] == runner.ladder.best
+    assert checkpoint["data"]["progress"] == runner.ladder.revision
 
 
 def test_success_is_judged_before_a_stuck_restore(tmp_path):
@@ -831,3 +831,13 @@ def test_a_restart_also_restores_the_timeline_store(tmp_path):
     runner.server.after_action()
     tkv.write_text('{"t": {"step": 2}}')
     assert runner.recover("worker exited") and json.loads(tkv.read_text()) == {"t": {"step": 1}}
+
+
+def test_a_stuck_restore_skips_checkpoints_from_before_battle_progress(tmp_path):
+    runner, _, _ = make_runner(tmp_path, [(SessionResult("completed"), None)])
+    runner._after_action()
+    runner.checkpoint("before damage")
+    runner.ladder.revision += 1  # progress that leaves the best score unchanged, like damage to a foe
+    assert runner._restore_progress() is False
+    runner.checkpoint("after damage")
+    assert runner._restore_progress() is True
