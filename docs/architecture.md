@@ -152,6 +152,8 @@ action and the status panel; on by default), `--web [HOST:]PORT` (the same on a 
   timeline, the planned focus, the last five milestones, the last stuck notice, the active capabilities (newest
   first), recent knowledge and the last development cycle. The game window shows the same text in a panel
   under the frame, refreshed at session starts and ends, milestones and stuck notices.
+- `pokeagent runs`: one line per run (state, play sessions and actions, and the map, badges and party read from its
+  latest state on a fresh emulator, about 0.3 s per run).
 - `pokeagent view RUN [CHECKPOINT]`: the game window (and/or `--web` page) with the latest state (or a checkpoint of
   the current timeline) and the status panel, without playing. `--keyboard` plays a copy with the keyboard instead,
   two frames per step at the core's speed, and `--out` keeps an in-game save made there. `pokeagent export-sav RUN [CHECKPOINT] [--out PATH] [--force]`: the game

@@ -84,6 +84,7 @@ uv run pokeagent play --rom /path/to/your/red.gb --objective "Get the first badg
 uv run pokeagent resume 20261127-170000                       # continue a run where it stopped
 uv run pokeagent restore 20261127-170000                      # list the checkpoints a stopped run can go back to
 uv run pokeagent restore 20261127-170000 1764263000000000000.state  # go back; learned knowledge stays
+uv run pokeagent runs                                         # every run and where its game stands
 uv run pokeagent status 20261127-170000                       # where a run stands
 uv run pokeagent view 20261127-170000                         # show the game where it stopped (or at a checkpoint)
 uv run pokeagent view 20261127-170000 --keyboard --out mine.sav  # play on yourself; keep your in-game save

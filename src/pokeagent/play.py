@@ -1024,6 +1024,40 @@ def play_by_hand(
     return f"wrote your in-game save to {out}"
 
 
+def _where(run_dir: Path) -> str:
+    """Where a run's game stands, read from its latest state on a fresh emulator."""
+    if (saved := latest_state(run_dir)) is None:
+        return "not started"
+    try:
+        meta, rom, adapter = _run_rom(run_dir)
+        with Emulator(core_path(meta["core"]), rom, options=meta["core_options"]) as emu:
+            emu.load_state(saved)
+            state = adapter.state(emu)
+    except (OSError, ValueError, EmulatorError) as e:  # a moved or changed ROM should not hide the other runs
+        return f"cannot read its game: {e}"
+    if not state["in_game"]:
+        return "before the game starts (title screen or power-on)"
+    party = state["party"]
+    team = f"{len(party)} Pokémon up to level {max(p['level'] for p in party)}" if party else "no Pokémon yet"
+    return f"{state['map']}, {state['badges']} badges, {team}"
+
+
+def list_runs(data_dir: Path) -> str:
+    """One line per run in `data_dir`, oldest first: its id, state, play sessions and actions, and where its game
+    stands."""
+    lines = []
+    for meta in sorted((data_dir / "runs").glob("*/run.json")):
+        run_dir = meta.parent
+        with contextlib.closing(open_memory(run_dir, data_dir)) as memory:
+            state, reason = memory.status()
+            rows = [r for r in stats.sessions(memory) if r["mode"] == "play"]
+        if state == "running" and not stats.live(run_dir):  # the store says running until the run ends or pauses
+            state, reason = "stopped", ""
+        played = f"{len(rows)} sessions, {sum(r['actions'] for r in rows):,} actions"
+        lines.append(f"{run_dir.name}  {state}{f' ({reason})' if reason else ''}; {played}; {_where(run_dir)}")
+    return "\n".join(lines) or f"no runs in {data_dir / 'runs'}"
+
+
 def export_save(run_dir: Path, data_dir: Path, out: Path, checkpoint: str | None = None, force: bool = False) -> str:
     """Write the run's game as an in-game save to `out`: the cartridge's battery RAM, the standard .sav other
     emulators load. The game is saved through its START menu on a copy of the state, so the run does not change. The
