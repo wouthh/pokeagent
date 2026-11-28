@@ -13,6 +13,7 @@ import hashlib
 import io
 import json
 import os
+import random
 import shutil
 import signal
 import threading
@@ -33,7 +34,11 @@ from pokeagent.games.pokemon_gen1 import (
     DEFAULT_CHECK,
     DEFAULT_OBJECTIVE,
     FAMILY,
+    GLITCHES,
     OBSERVATIONS,
+    SIDE_QUESTS,
+    STARTERS,
+    TEAM_TYPES,
     Gen1,
 )
 from pokeagent.games.pokemon_gen1 import decode as decode_text
@@ -52,6 +57,11 @@ MAX_RESTARTS = 3  # emulator restarts per play
 KNOWLEDGE_HITS = 5
 IDENTITY = ("rom_sha1", "core", "core_options")  # what a checkpoint must share with its run to be restored
 LEGEND = "@ you, S person or object, W warp/door, . walkable, , grass, v < > ^ ledges, # blocked"
+STYLES = ("natural", "direct")
+NICKNAME_THEMES = (
+    "gemstones", "spices and herbs", "rivers", "stars and constellations", "heroes of old legends", "cheeses",
+    "weather", "trees", "musical terms", "painters", "desserts", "mountains", "sea creatures", "colours",
+)  # fmt: skip
 
 
 def default_data_dir() -> Path:
@@ -165,10 +175,10 @@ class Game:
 
     def state_text(self) -> str:
         with self.lock:
-            return self._text(self.adapter.state(self))
+            return self._text(self.adapter.state(self), detail=True)
 
-    def _text(self, state: dict) -> str:
-        text = self.adapter.state_text(state)
+    def _text(self, state: dict, detail: bool = False) -> str:
+        text = self.adapter.state_text(state, detail)
         if shown := self._custom(shown_only=True):
             text += "\nYour observations: " + ", ".join(f"{name}={value!r}" for name, value in shown.items())
         return text
@@ -186,7 +196,7 @@ class Game:
     def full_state(self) -> tuple[str, bytes]:
         with self.lock:
             state = self.adapter.state(self)
-            text = self._text(state)
+            text = self._text(state, detail=True)
             if state["in_game"]:
                 grid = self.adapter.grid(self)
                 text += f"\n\nWhole map ({LEGEND}):\n{grid.render((state['x'], state['y']))}"
@@ -322,14 +332,33 @@ class Game:
         return f"{result['outcome']} after {result['steps']} step(s)"
 
 
-def new_run(rom: Path, objective: str | None, data_dir: Path, success: dict | None = None) -> Path:
-    """Create a run directory for a supported ROM. Only the adapter's default objective gets its trusted check;
-    `success` is the user's own check."""
+def new_run(
+    rom: Path | None,
+    objective: str | None,
+    data_dir: Path,
+    success: dict | None = None,
+    style: str = "natural",
+    glitches: bool = False,
+    source: Path | None = None,
+) -> Path:
+    """Create a run directory for a supported ROM, or for `source`'s ROM starting from that run's latest game. Only
+    the adapter's default objective gets its trusted check; `success` is the user's own check. The natural `style`
+    draws the run's variety here, once; `glitches` allows the game's known glitches."""
+    if style not in STYLES:
+        raise ValueError(f"unknown style {style!r}; choose from {', '.join(STYLES)}")
+    start = None
+    if source:
+        source_meta, rom, _ = _run_rom(source)
+        if (source_meta["core"], source_meta["core_options"]) != (CORE, CORE_OPTIONS):
+            raise ValueError(f"run {source.name} used another core or core options; start it from power-on instead")
+        if (start := latest_state(source)) is None:
+            raise ValueError(f"run {source.name} has no game to start from yet")
     data = rom.read_bytes()
     adapter = Gen1(data)  # refuses unsupported ROMs
     if success is not None:
         objectives.validate(success, [name for name in OBSERVATIONS if name != "in_game"])
     (data_dir / "runs").mkdir(parents=True, exist_ok=True, mode=0o700)
+    earlier = [json.loads(path.read_text()) for path in (data_dir / "runs").glob("*/run.json")]
     run_dir = data_dir / "runs" / time.strftime("%Y%m%d-%H%M%S")
     run_dir.mkdir(mode=0o700)
     meta = {
@@ -343,9 +372,72 @@ def new_run(rom: Path, objective: str | None, data_dir: Path, success: dict | No
         "core": CORE,
         "core_options": CORE_OPTIONS,
         "created": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "style": style,
+        "glitches": glitches,
+        "variety": draw_variety(adapter, earlier) if style == "natural" else None,
+        "from": source.name if source else None,
     }
     (run_dir / "run.json").write_text(json.dumps(meta, indent=1) + "\n")
+    if start:
+        write_atomic(run_dir / "recovery.state", start)
     return run_dir
+
+
+def draw_variety(adapter: Gen1, earlier: list[dict]) -> dict:
+    """A natural run's draw: the starter the fewest `earlier` runs drew, three team types besides the starter's, a
+    nickname theme and three side quests."""
+    drawn = [meta["variety"]["starter"] for meta in earlier if meta["variety"]]
+    starters = {adapter.species_name(index): types for index, types in STARTERS.items()}
+    fewest = min(drawn.count(name) for name in starters)
+    starter = random.choice([name for name in starters if drawn.count(name) == fewest])
+    types = random.sample([t for t in TEAM_TYPES if t not in starters[starter]], 3)
+    return {
+        "starter": starter,
+        "team_types": [adapter.types[t] for t in types],
+        "nicknames": random.choice(NICKNAME_THEMES),
+        "side_quests": random.sample(SIDE_QUESTS, 3),
+    }
+
+
+def style_text(meta: dict, party: list[dict]) -> list[str]:
+    """The brief's play style lines: the natural style's house rules with the run's variety and team facts, and the
+    glitch allowance. None for a direct run without glitches."""
+    lines = []
+    if variety := meta["variety"]:
+        types = variety["team_types"]
+        lines += [
+            "Play style: natural. Play the way a person enjoys the game rather than by the fastest route; where the"
+            " two conflict, the objective comes first.",
+            "- Catch each species you do not own yet when you meet it, as far as your Poké Balls and money allow.",
+            "- Build a balanced team of up to six in which no two members share a type, not the team you would always"
+            f" pick: besides your starter, this run's team has Pokémon of the types {', '.join(types[:-1])} and"
+            f" {types[-1]}.",
+            "- Train the team evenly: rotate who battles so nobody runs far ahead of the others.",
+            "- Use your items: healing and status items, TMs and HMs on members who benefit, evolution stones,"
+            " PP Ups, Rare Candies.",
+            "- Leave Pokémon in the PC when your team has no room or no use for them, and swap them back when they"
+            " fit.",
+            f"- Nickname every Pokémon you take into your team; this run's names: {variety['nicknames']}.",
+            f"- If you still have a starter to choose, choose {variety['starter']}.",
+            "- Side quests for this run, to take up when they fit: " + " ".join(variety["side_quests"]),
+        ]
+        if party:
+            levels = [p["level"] for p in party]
+            members: dict[str, list[str]] = {}
+            for p in party:
+                for kind in p["types"]:
+                    members.setdefault(kind, []).append(p["name"])
+            shared = [f"{kind} ({', '.join(names)})" for kind, names in members.items() if len(names) > 1]
+            plain = [p["name"] for p in party if p["name"] == p["species"]]
+            lines.append(
+                f"Your team now: levels {min(levels)} to {max(levels)}"
+                + (f"; sharing a type: {'; '.join(shared)}" if shared else "")
+                + (f"; no nickname yet: {', '.join(plain)}" if plain else "")
+                + "."
+            )
+    if meta["glitches"]:
+        lines.append(GLITCHES)
+    return lines
 
 
 class Runner:
@@ -539,6 +631,9 @@ class Runner:
         notes = self.run_dir / "notes.md"
         observations = self.game.observations()
         lines = [f"Objective: {self.meta['objective']}", *self._checks(observations), ""]
+        state = self.game.progress_state()
+        if style := style_text(self.meta, state["party"] if state["in_game"] else []):
+            lines += [*style, ""]
         plays = [e for e in self.memory.events("session_start", limit=-1) if e["data"].get("mode") != "develop"]
         last_start = plays[-1]["id"] if plays else 0  # what happened since the last play session began
         for restored in self.memory.events("restore", after=last_start):

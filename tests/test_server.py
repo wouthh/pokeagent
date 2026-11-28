@@ -170,6 +170,9 @@ def test_knowledge_and_objective_tools(server):
     assert claimed.startswith("Recorded") and s.sessions[token].claim == "caught one"
     s.memory.add_check(badge, "user")
     assert text(call(url, token, "report_objective_complete", {"evidence": "x"})).startswith("Not recorded")
+    idea = {"objective": "Raise a team of six Bug types to level 50", "why": "a challenge run"}
+    assert text(call(url, token, "suggest_objective", idea)).endswith("for the user")
+    assert [e["data"] for e in s.memory.events("objective_suggested")] == [idea]
 
 
 def test_a_failed_emulator_is_restarted_while_restarts_remain(server):

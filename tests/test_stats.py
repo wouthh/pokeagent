@@ -4,6 +4,7 @@ from pokeagent import cli, play, stats
 from pokeagent.memory import Memory
 
 META = {"objective": "finish the game", "rom_sha1": "red", "family": "pokemon-gen1"}
+META |= {"style": "natural", "glitches": True, "from": "r0"}
 
 
 def played(tmp_path, run, cost, waited=0.0):
@@ -64,6 +65,9 @@ def test_status_and_the_cli(tmp_path, capsys):
     assert "Planned focus: beat Brock" in text and "Milestones: first visit to Pallet Town; badge 1" in text
     assert "Recent knowledge: Pewter City (hypothesis)" in text
     assert "Development: 1 cycle(s); last for step: staged version 1" in text
+    assert "Style: natural, glitches allowed; started from run r0" in text
+    memory.event("objective_suggested", {"objective": "a Bug-type team", "why": "for fun"}, 1)
+    assert stats.status(memory, run_dir).endswith("for later runs:\n  a Bug-type team (for fun)")
     memory.close()
     assert cli.main(["status", str(run_dir)]) == 0 and "Planned focus: beat Brock" in capsys.readouterr().out
     played(data, "b", 2.0).close()

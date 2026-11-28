@@ -18,7 +18,18 @@ from pokeagent.emulator.cores import core_path
 from pokeagent.extensions import install
 from pokeagent.games.pokemon_gen1 import CORE, CORE_OPTIONS, DEFAULT_CHECK, HALL_OF_FAME, OBSERVATIONS, Gen1
 from pokeagent.memory import Memory
-from pokeagent.play import Game, Runner, latest_state, new_run, play, restorable, restore, run_lock
+from pokeagent.play import (
+    Game,
+    Runner,
+    draw_variety,
+    latest_state,
+    new_run,
+    play,
+    restorable,
+    restore,
+    run_lock,
+    style_text,
+)
 from pokeagent.server import GameServer
 from pokeagent.validation import validate
 
@@ -56,8 +67,9 @@ class FakeGame:
         self.restarts.append(state)
 
 
-def make_runner(tmp_path, results, objective=None, map_id=0, in_game=True):
-    """A Runner whose provider replays `results`: (SessionResult, summary or None) per session."""
+def make_runner(tmp_path, results, objective=None, map_id=0, in_game=True, style=None):
+    """A Runner whose provider replays `results`: (SessionResult, summary or None) per session. `style` adds to
+    run.json (a direct run without glitches by default)."""
     run_dir = tmp_path / "run"
     run_dir.mkdir(parents=True)
     meta = {
@@ -67,7 +79,11 @@ def make_runner(tmp_path, results, objective=None, map_id=0, in_game=True):
         "family": "pokemon-gen1",
         "core": "sameboy",
         "core_options": {"sameboy_model": "Game Boy"},
-    }
+        "style": "direct",
+        "glitches": False,
+        "variety": None,
+        "from": None,
+    } | (style or {})
     (run_dir / "run.json").write_text(json.dumps(meta))
     game = FakeGame(map_id, in_game)
     memory = Memory(tmp_path / "memory.db", "run")
@@ -618,6 +634,64 @@ def test_new_runs_record_their_checks_and_settled_runs_do_not_resume(rom_path, t
     objectives.claim(memory, "the agent reported the objective complete: badge")
     with pytest.raises(ValueError, match="settle it with `pokeagent objective confirm"):
         play(run_dir, tmp_path / "b")
+
+
+def test_natural_runs_vary_their_starter_team_types_and_side_quests(rom_path):
+    adapter = Gen1(rom_path.read_bytes())
+    earlier = [{"variety": {"starter": "BULBASAUR"}}, {"variety": None}, {"variety": {"starter": "SQUIRTLE"}}]
+    drawn = draw_variety(adapter, earlier)
+    assert drawn["starter"] == "CHARMANDER" and "FIRE" not in drawn["team_types"]  # the starter nobody drew yet
+    assert len(set(drawn["team_types"])) == 3 and len(set(drawn["side_quests"])) == 3 and drawn["nicknames"]
+    assert {draw_variety(adapter, [])["starter"] for _ in range(60)} == {"BULBASAUR", "CHARMANDER", "SQUIRTLE"}
+    assert all(
+        "GRASS" not in d["team_types"] and "POISON" not in d["team_types"]
+        for d in (
+            draw_variety(adapter, [{"variety": {"starter": s}} for s in ("CHARMANDER", "SQUIRTLE")]) for _ in range(20)
+        )
+    )
+
+
+def test_the_brief_carries_the_play_style_and_team_facts(tmp_path):
+    variety = {"starter": "SQUIRTLE", "team_types": ["ROCK", "ICE", "GHOST"], "nicknames": "rivers"}
+    variety["side_quests"] = ["Catch a Pikachu."]
+    runner, briefs, _ = make_runner(
+        tmp_path, [(SessionResult("completed"), None)], style={"style": "natural", "variety": variety, "glitches": True}
+    )
+    party = [
+        {"name": "NILE", "species": "SQUIRTLE", "types": ["WATER"], "level": 14},
+        {"name": "PIDGEY", "species": "PIDGEY", "types": ["NORMAL", "FLYING"], "level": 6},
+        {"name": "RHINE", "species": "SPEAROW", "types": ["NORMAL", "FLYING"], "level": 9},
+    ]
+    runner.game.progress_state = lambda: {"in_game": True, "party": party}
+    runner.loop("http://127.0.0.1:1/mcp", max_sessions=1)
+    brief = briefs[0]
+    assert "Play style: natural" in brief and "types ROCK, ICE and GHOST" in brief and "rivers" in brief
+    assert "choose SQUIRTLE" in brief and "Catch a Pikachu." in brief and "Glitches: allowed" in brief
+    assert (
+        "Your team now: levels 6 to 14; sharing a type: NORMAL (PIDGEY, RHINE); FLYING (PIDGEY, RHINE);"
+        " no nickname yet: PIDGEY." in brief
+    )
+    assert style_text({"variety": None, "glitches": False}, party) == []  # direct: the objective by its own route
+
+
+def test_a_run_can_start_from_another_runs_game(rom_path, tmp_path):
+    source = new_run(rom_path, None, tmp_path)
+    with pytest.raises(ValueError, match="no game to start from yet"):
+        new_run(None, "train the team", tmp_path, source=source)
+    (source / "recovery.state").write_bytes(b"the game")
+    time.sleep(1.1)  # run ids are timestamps
+    run_dir = new_run(None, "train the team", tmp_path, style="direct", glitches=True, source=source)
+    meta = json.loads((run_dir / "run.json").read_text())
+    assert (meta["from"], meta["style"], meta["glitches"], meta["variety"], meta["check"]) == (
+        source.name,
+        "direct",
+        True,
+        None,
+        None,
+    )
+    assert latest_state(run_dir) == b"the game" and meta["rom"] == str(rom_path.resolve())
+    with pytest.raises(ValueError, match="unknown style"):
+        new_run(rom_path, None, tmp_path / "x", style="speedrun")
 
 
 def test_every_action_saves_the_recovery_state_and_a_restart_loads_it(tmp_path):

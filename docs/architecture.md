@@ -115,6 +115,14 @@ action and the status panel; on by default), `--web [HOST:]PORT` (the same on a 
   - If the emulator worker fails, a new one starts at `recovery.state` (or the latest checkpoint, or power-on) and
     the failed call reports that it had no effect, so at most that one action is lost. A failed `recovery.state` write (disk full) counts as an emulator failure, so the emulator rolls back to the last written state. After three restarts in one
     `play`, every game tool refuses with the reason and the run stops after the session.
+- **Play style** (`--style`, fixed in `run.json`): `natural` (default) adds house rules to the brief (catch new
+  species, a balanced team without shared types, even training, items, the PC, nicknames) with the run's variety,
+  drawn once at creation by `draw_variety` (the starter the fewest earlier runs drew, three team types besides the
+  starter's, a nickname theme, three of the adapter's side quests), and a line of team facts (level range, shared
+  types, members without a nickname). `direct` adds nothing. `--glitches` adds the adapter's glitch allowance
+  (`GLITCHES`); without it the prompt rules out glitches. Side quests and house rules are guidance, not checks.
+- **`--from RUN`** starts a new run on that run's ROM from its latest state (copied as the new run's
+  `recovery.state`; the core and options must match); `run.json` records it as `from`.
 - **Resume** loads `recovery.state` (else the latest checkpoint, else power-on). Notes and progress are current with
   it, so nothing is replayed or restored.
 - **State before a game:** until a game is started or loaded, the adapter reports only the screen, because WRAM
@@ -630,3 +638,15 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
   current ROM (a family-scoped tool is visible to every ROM in the family); a nested request that fails after
   changing the game still gets the caller's invariants checked; every action's recovery snapshot also holds the
   timeline store (`recovery.tkv.json`), so an emulator restart undoes a failed action's `ctx.tkv` writes too.
+- **2026-11-28: Natural play is the default style, and its variety is drawn by code.** Wout wants runs to play
+  like a person and differ from each other. The model alone tends to repeat its choices (the same starter and
+  team), so pokeagent draws the starter, team types, nickname theme and side quests once per run and keeps them in
+  `run.json`; the house rules stay guidance in the brief, because judging a "balanced" or "natural" game has no
+  trustworthy check. `--style direct` keeps the shortest route for benchmarks. The four runs made before styles
+  existed were migrated once to `"style": "direct"` with no variety, as they were played.
+- **2026-11-28: Glitches are opt-in and stay controller input.** `--glitches` only changes what the agent may do
+  with the controller; there is still no memory-write path. Glitch routes can satisfy the Hall of Fame check, which
+  is accepted as for a glitched speedrun.
+- **2026-11-28: Objective ideas from the agent are suggestions only.** `suggest_objective` records an event that
+  `status` shows; the run's objective stays immutable, and the user starts a run with a suggestion if they like it.
+  `--from RUN` lets such a run (training, stat exp, competitive sets) start from an existing game.

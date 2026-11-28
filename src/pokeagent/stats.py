@@ -175,6 +175,8 @@ def status(memory: Memory, run_dir: Path, now: str = "") -> str:
     rows = sessions(memory)
     lines = [f"Run {memory.run}: {state}" + (f" ({reason})" if reason else "") + (f"; now {now}" if now else "")]
     lines.append(f"Objective: {meta['objective']}")
+    style = meta["style"] + (", glitches allowed" if meta["glitches"] else "")
+    lines.append(f"Style: {style}" + (f"; started from run {meta['from']}" if meta["from"] else ""))
     lines += [f"Check ({c['source']}): {objectives.describe(c['condition'])}" for c in memory.checks("active")]
     play = [r for r in rows if r["mode"] == "play"]
     lines.append(
@@ -199,4 +201,7 @@ def status(memory: Memory, run_dir: Path, now: str = "") -> str:
         last = cycles[-1]["data"]
         outcome = f"staged version {last['staged']}" if last["staged"] else "nothing validated"
         lines.append(f"Development: {len(cycles)} cycle(s); last for {last['tool']}: {outcome}")
+    if ideas := memory.events("objective_suggested", limit=3):
+        lines.append("Objectives the agent suggested for later runs:")
+        lines += [f"  {e['data']['objective']} ({e['data']['why']})" for e in ideas]
     return "\n".join(lines)

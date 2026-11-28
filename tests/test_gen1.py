@@ -6,7 +6,19 @@ import pytest
 
 from pokeagent.emulator.client import Emulator
 from pokeagent.emulator.cores import core_path
-from pokeagent.games.pokemon_gen1 import CHARMAP, CORE_OPTIONS, DEX_OWNED, PARTY_COUNT, Gen1, Grid, bcd, decode
+from pokeagent.games.pokemon_gen1 import (
+    CHARMAP,
+    CORE_OPTIONS,
+    DEX_OWNED,
+    PARTY_COUNT,
+    PARTY_MONS,
+    PARTY_NICKS,
+    Gen1,
+    Grid,
+    bcd,
+    decode,
+    dvs,
+)
 from pokeagent.play import Game
 
 ENCODE = {v: k for k, v in CHARMAP.items() if len(v) == 1}
@@ -172,7 +184,7 @@ def test_state_tolerates_any_ram(rom_path):
 
     for seed in range(200):
         state = gen1.state(Noise(seed))
-        gen1.state_text(state), gen1.observations(state), gen1.fingerprint(state)
+        gen1.state_text(state, detail=True), gen1.observations(state), gen1.fingerprint(state)
 
 
 def test_nothing_is_owned_before_the_party_has_a_member(rom_path):
@@ -187,6 +199,35 @@ def test_nothing_is_owned_before_the_party_has_a_member(rom_path):
 
     assert gen1.state(Ram(0))["dex_owned"] == 0
     assert gen1.state(Ram(1))["dex_owned"] == 4
+
+
+def test_party_members_show_types_pp_stat_exp_and_dvs(rom_path):
+    gen1 = Gen1(rom_path.read_bytes())
+    mon = bytearray(44)
+    mon[0], mon[3], mon[5], mon[6], mon[33] = 0x99, 7, 0x16, 0x03, 7  # BULBASAUR, GRASS/POISON, level 7
+    mon[8:10], mon[29:31] = bytes([0x21, 0x2D]), bytes([0x40 | 33, 40])  # TACKLE (1 PP Up), GROWL
+    mon[17:27] = b"".join(v.to_bytes(2) for v in (300, 250, 200, 280, 260))
+    mon[27:29], mon[36:44] = bytes([0x9C, 0x3F]), b"".join(v.to_bytes(2) for v in (12, 13, 11, 14))
+    ram = {PARTY_COUNT: 1} | dict(enumerate(mon, PARTY_MONS)) | dict(enumerate(text("ROSE") + b"\x50", PARTY_NICKS))
+
+    class Ram:
+        def read(self, addr, n):
+            return bytes(ram.get(a, 0) for a in range(addr, addr + n))
+
+    state = gen1.state(Ram())
+    member = state["party"][0]
+    assert (member["name"], member["species"], member["types"]) == ("ROSE", "BULBASAUR", ["GRASS", "POISON"])
+    assert (member["pp"], member["stats"]) == ([(33, 1), (40, 0)], [12, 13, 11, 14])
+    assert member["stat_exp"] == [250, 200, 280, 260, 300]  # HP's comes first in RAM, last here
+    assert member["dvs"] == dvs(0x9C, 0x3F) == [9, 12, 3, 15, 11]  # HP's from the low bits: 1, 0, 1, 1
+    shown = gen1.state_text(state | {"in_game": True}, detail=True)
+    assert "ROSE (BULBASAUR, GRASS/POISON) L7 HP 0/0 ok [TACKLE 33pp (1 PP Up), GROWL 40pp]" in shown
+    assert (
+        "  ROSE: Atk 12 Def 13 Spd 11 Spc 14; stat exp Atk 250 Def 200 Spd 280 Spc 260 HP 300;"
+        " DVs Atk 9 Def 12 Spd 3 Spc 15 HP 11"
+    ) in shown
+    assert "stat exp" not in gen1.state_text(state | {"in_game": True})  # action results stay short
+    assert gen1.types[0x1A] == "DRAGON" and gen1.types[6] == "BIRD"
 
 
 def test_press_waits_for_a_menu_to_react(game):
