@@ -279,8 +279,8 @@ def layout_problems(read, layout: dict[str, int], banks: int = 64) -> list[str]:
 
 class Gen1:
     """Reads state and drives inputs for one English Red, Blue or Yellow ROM (or a hack of their engine) inside an
-    `Emulator`. The version comes from the ROM itself: its tables are scanned for, Yellow is told by its
-    header title or colour flag, and the first state read of a running game checks the WRAM layout against the
+    `Emulator`. The version comes from the ROM itself: its tables are scanned for, the base game is guessed from the
+    header title and table banks, and the first state read of a running game checks the WRAM layout against the
     game's own invariants."""
 
     ROMS, FAMILY, CORE, CORE_OPTIONS = ROMS, FAMILY, CORE, CORE_OPTIONS
@@ -300,19 +300,11 @@ class Gen1:
         header = rom[0x134:0x144].split(b"\0")[0].decode("ascii", "replace")
         self.title = ROMS.get(hashlib.sha1(rom).hexdigest()) or f"Gen 1 ROM hack (header title {header})"
         self.rom = rom
-        self.yellow = "YELLOW" in header or bool(rom[0x143] & 0x80)  # Yellow is colour-flagged; hacks keep that
-        self.layout = "yellow" if self.yellow else "red-blue"
-        self.ram = SimpleNamespace(**RAM_LAYOUTS[self.layout])
-        self.layout_checked = False  # set once a running game has confirmed (or replaced) the layout
-        if self.yellow:
-            self.CORE_OPTIONS, self.STARTERS, self.SIDE_QUESTS = (
-                YELLOW_CORE_OPTIONS,
-                YELLOW_STARTERS,
-                YELLOW_SIDE_QUESTS,
-            )
-            self.GLITCHES, self.map_names = YELLOW_GLITCHES, YELLOW_MAP_NAMES
-        else:
-            self.map_names = MAP_NAMES
+        if rom[0x143] & 0x80:  # colour support is hardware, not ancestry: Red/Blue hacks may set it too
+            self.CORE_OPTIONS = YELLOW_CORE_OPTIONS
+        self.layout_checked = False  # set once a running game has confirmed (or replaced) the base game
+        # first guess at the base game: Yellow keeps its name tables in bank 0x3A, Red and Blue in bank 7
+        self._set_base("YELLOW" in header or tables["species"][0] == 0x3A)
         self.species = [decode(self._rom(tables["species"], 190 * 10)[i * 10 : i * 10 + 10]) for i in range(190)]
         self.items = self._names(tables["items"], 0x61)
         self.moves = self._names(tables["moves"], 165)
@@ -327,14 +319,24 @@ class Gen1:
             for f, standing, ledge, _ in self._table(tables["ledges"], 4)
         }
 
+    def _set_base(self, yellow: bool) -> None:
+        """Select everything that depends on the base game (RAM layout, starters, map names, flavour text)."""
+        self.yellow = yellow
+        self.layout = "yellow" if yellow else "red-blue"
+        self.ram = SimpleNamespace(**RAM_LAYOUTS[self.layout])
+        if yellow:
+            self.STARTERS, self.SIDE_QUESTS = YELLOW_STARTERS, YELLOW_SIDE_QUESTS
+            self.GLITCHES, self.map_names = YELLOW_GLITCHES, YELLOW_MAP_NAMES
+        else:
+            self.STARTERS, self.SIDE_QUESTS, self.GLITCHES, self.map_names = STARTERS, SIDE_QUESTS, GLITCHES, MAP_NAMES
+
     def check_layout(self, emu: Emulator) -> None:
         """Once a game runs, confirm the WRAM layout the header suggested, or switch to the one that fits (hacks)."""
         if self.layout_checked:
             return
         fits = [name for name, layout in RAM_LAYOUTS.items() if not layout_problems(emu.read, layout)]
         if self.layout in fits or len(fits) == 1:
-            self.layout = self.layout if self.layout in fits else fits[0]
-            self.ram = SimpleNamespace(**RAM_LAYOUTS[self.layout])
+            self._set_base((self.layout if self.layout in fits else fits[0]) == "yellow")
             self.layout_checked = True
 
     def _offset(self, where: tuple[int, int]) -> int:

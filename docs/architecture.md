@@ -82,7 +82,9 @@ read from the user's ROM at runtime, so no game text is stored in the repository
   one run of 190 ten-byte name records, the strings after POUND and MASTER BALL, the pointers to NORMAL, FIGHTING and
   FLYING, the row shapes of the tile-pair and ledge tables). `recognises` is true when all six are found, so Blue Kaizo
   works with no entry; `ROMS` only names known dumps (an unknown one is "Gen 1 ROM hack (header title X)"). Yellow
-  (header title) selects its own layout, `STARTERS` (Pikachu only), side quests, map names and colour core options.
+  (header title, or the species table in bank 0x3A) selects its own layout, `STARTERS` (Pikachu only), side quests
+  and map names; the first state read of a running game corrects a wrong guess for all of them. The CGB flag picks
+  only the colour core options, since Red/Blue hacks may set it too.
 - **Layout probe.** `RAM_LAYOUTS` holds Red/Blue's WRAM addresses and Yellow's (one lower from `WALK_COUNTER` on).
   The first `state` of a running game checks the guess against the game's own invariants (name, party and bag
   terminators, map header, tileset pointers) and switches to the layout that fits; if none does the state says the

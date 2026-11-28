@@ -106,11 +106,17 @@ def test_the_first_state_read_corrects_a_wrong_layout_guess(yellow_game):
     gen1, emu, bedroom = yellow_game
     emu.load_state(bedroom)
     hack = Gen1(gen1.rom)
-    hack.layout, hack.ram = (
-        "red-blue",
-        type(hack.ram)(**RAM_LAYOUTS["red-blue"]),
-    )  # as for a Yellow hack with another title
+    hack._set_base(False)  # as for a Yellow hack the first guess missed
     assert hack.state(emu)["player_name"] == "YELLOW" and hack.layout == "yellow"
+    assert hack.yellow and hack.STARTERS == {0x54: (0x17,)} and len(hack.map_names) == 249
+
+
+def test_the_colour_flag_picks_hardware_not_the_base_game(find_rom):
+    rom = bytearray(find_rom("01 Pokemon Blue Kaizo Version.gb").read_bytes())
+    rom[0x143] = 0x80  # a Red hack with Game Boy Color support
+    adapter = Gen1(bytes(rom))
+    assert adapter.CORE_OPTIONS == {"sameboy_model": "Game Boy Color"}
+    assert not adapter.yellow and adapter.layout == "red-blue" and 0x99 in adapter.STARTERS
 
 
 def test_an_unknown_layout_is_reported_not_refused(yellow_game):
