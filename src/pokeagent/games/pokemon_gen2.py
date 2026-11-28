@@ -271,7 +271,8 @@ class Gen2(Gen1):
         self.base_data = tables["base_data"]
         self.permissions = self._rom(tables["permissions"], 256)
         self.landmarks = tables["landmarks"]
-        self.first_tm = self.items.index("TM01") + 1 if "TM01" in self.items else None
+        names = [f"TM{n:02d}" for n in range(1, 51)] + [f"HM{n:02d}" for n in range(1, 8)]
+        self.tm_items = [self.items.index(n) + 1 for n in names] if all(n in self.items for n in names) else []
         self._areas: dict = {}
 
     def _set_base(self, crystal: bool) -> None:
@@ -307,7 +308,7 @@ class Gen2(Gen1):
         """The map's name (known dumps) or its area name from the ROM's landmark table plus its raw ids (hacks)."""
         if name := self.map_names.get(map_id):
             return name
-        area = self._area(emu.read(self.ram.MAP_ATTRIBUTES, 4), emu.read(self.ram.TILESET, 1)[0])
+        area = self._area(emu.read(self.ram.MAP_ATTRIBUTES, 5), emu.read(self.ram.TILESET, 1)[0])
         return f"{area + ' ' if area else ''}(map {map_id >> 8}:{map_id & 255})"
 
     def _area(self, attributes: bytes, tileset: int) -> str:
@@ -465,10 +466,9 @@ class Gen2(Gen1):
         raw = read(ram.NUM_BALLS + 1, 24)
         for i in range(min(read(ram.NUM_BALLS, 1)[0], 12)):
             bag.append({"item": self.item_name(raw[2 * i]), "qty": raw[2 * i + 1]})
-        if self.first_tm:
-            for i, count in enumerate(read(ram.TMHM, 57)):
-                if count:
-                    bag.append({"item": self.item_name(self.first_tm + i), "qty": count})
+        for item, count in zip(self.tm_items, read(ram.TMHM, 57), strict=False):
+            if count:
+                bag.append({"item": self.item_name(item), "qty": count})
         return bag
 
     # ---- walk grid ----
