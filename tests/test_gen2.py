@@ -1,10 +1,7 @@
 """Gen 2 adapter: byte-level tests on synthetic memory, then ROM tests that skip when a ROM is not in roms/.
 
-ROMs are read from the main checkout's ignored roms/ folder, or from the folder named by POKEAGENT_ROMS_DIR.
+ROMs are read from the main checkout's ignored roms/ folder (the `find_rom` fixture).
 """
-
-import os
-from pathlib import Path
 
 import pytest
 
@@ -29,7 +26,7 @@ ROM_NAMES = {
     "gold": "Pokemon Gold.gbc",
     "silver": "Pokemon Silver.gbc",
     "crystal": "Pokemon Crystal.gbc",
-    "clear": "Pokemon Crystal Clear 2.5.1.gbc",
+    "clear": "02 Pokemon Crystal Clear 2.5.1.gbc",
 }
 
 
@@ -318,22 +315,6 @@ def test_hall_of_fame_is_the_default_check():
 # ---- ROM tests ----
 
 
-def _rom_path(name: str) -> Path:
-    folder = os.environ.get("POKEAGENT_ROMS_DIR")
-    if folder is None:
-        import subprocess
-
-        common = subprocess.run(
-            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-            cwd=Path(__file__).parent, capture_output=True, text=True, check=False,
-        ).stdout.strip()  # fmt: skip
-        folder = str(Path(common).parent / "roms")
-    path = Path(folder) / ROM_NAMES[name]
-    if not path.is_file():
-        pytest.skip(f"no {ROM_NAMES[name]} in {folder}")
-    return path
-
-
 @pytest.mark.parametrize(
     ("name", "title", "layout"),
     [
@@ -342,8 +323,8 @@ def _rom_path(name: str) -> Path:
         ("crystal", "Pokémon Crystal (English 1.1)", "crystal"),
     ],
 )
-def test_identify_and_tables(name, title, layout):
-    path = _rom_path(name)
+def test_identify_and_tables(find_rom, name, title, layout):
+    path = find_rom(ROM_NAMES[name])
     gen2 = identify(path.read_bytes())
     assert isinstance(gen2, Gen2) and gen2.title == title and gen2.layout == layout
     assert gen2.species[0] == "BULBASAUR" and gen2.species[250] == "CELEBI" and gen2.species[154] == "CYNDAQUIL"
@@ -356,8 +337,8 @@ def test_identify_and_tables(name, title, layout):
     assert not Gen1.recognises(path.read_bytes())
 
 
-def test_crystal_clear_is_found_by_scanning():
-    path = _rom_path("clear")
+def test_crystal_clear_is_found_by_scanning(find_rom):
+    path = find_rom(ROM_NAMES["clear"])
     gen2 = identify(path.read_bytes())
     assert gen2.title.startswith("Gen 2 ROM") and gen2.layout == "crystal" and not gen2.known
     assert gen2.species[0] == "BULBASAUR" and gen2.moves[0] == "POUND" and gen2.base_types(155) == ["FIRE"]
@@ -378,15 +359,15 @@ def boot_new_game(gen2: Gen2, emu: Emulator) -> bytes:
 
 
 @pytest.fixture(scope="module", params=["gold", "crystal"])
-def game(request):
-    path = _rom_path(request.param)
+def game(request, find_rom):
+    path = find_rom(ROM_NAMES[request.param])
     gen2 = Gen2(path.read_bytes())
     with Emulator(core_path("sameboy"), path, options=gen2.CORE_OPTIONS) as emu:
         yield gen2, emu, boot_new_game(gen2, emu)
 
 
-def test_power_on_is_not_a_game():
-    path = _rom_path("gold")
+def test_power_on_is_not_a_game(find_rom):
+    path = find_rom(ROM_NAMES["gold"])
     gen2 = Gen2(path.read_bytes())
     with Emulator(core_path("sameboy"), path, options=gen2.CORE_OPTIONS) as emu:
         emu.run([], 60)

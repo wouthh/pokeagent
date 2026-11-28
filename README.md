@@ -201,10 +201,7 @@ Runs ruff (lint and format), installs the pinned cores if missing, runs the test
 tests and the MIT-licensed [dmg-acid2](https://github.com/mattcurrie/dmg-acid2) test ROM), and fails if any ROM,
 save or state file is tracked. No game ROM is needed; with your own Red or Blue dump in `roms/` (ignored) or
 `POKEAGENT_ROM` set, the adapter tests also boot a new game and walk out of the player's house; Yellow, Blue Kaizo
-and the Gen 2 dumps there add the version and scanner tests. The Gen 2 tests (`tests/test_gen2.py`) read Gold,
-Silver, Crystal and Crystal Clear from `roms/` or from the folder `POKEAGENT_ROMS_DIR` names (file names
-`Pokemon Gold.gbc`, `Pokemon Silver.gbc`, `Pokemon Crystal.gbc`, `Pokemon Crystal Clear 2.5.1.gbc`) and skip any that
-is missing.
+and the Gen 2 dumps there add the version and scanner tests. The Gen 2 tests (`tests/test_gen2.py`) read Gold, Silver, Crystal and Crystal Clear from `roms/` and skip any that is missing.
 
 ## Licence
 
