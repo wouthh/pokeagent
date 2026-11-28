@@ -170,3 +170,9 @@ def test_web_command_address():
     args = cli.build_parser().parse_args(["web"])
     assert args.address == ("127.0.0.1", 8765)
     assert cli.build_parser().parse_args(["web", "0.0.0.0:9000"]).address == ("0.0.0.0", 9000)
+
+
+def test_keyboard_has_the_gba_shoulder_buttons_and_the_window_follows_the_core():
+    assert viewer.held(frozenset(), "a", True) == {"l"} and viewer.held(frozenset({"l"}), "A", False) == frozenset()
+    assert viewer.held(frozenset(), "s", True) == {"r"} and "L" in viewer.KEY_HELP
+    assert viewer.SCREENS == {"sameboy": (160, 144), "mgba": (240, 160)}

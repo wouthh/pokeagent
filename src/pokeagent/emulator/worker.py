@@ -58,12 +58,6 @@ def serve(core: str, rom: str, options: dict[str, str], battery: str | None = No
         options=DictOptionDriver(variables=options),
         log=None,
     ) as session:
-        # Readable regions: every non-const memory descriptor (RAM, VRAM, OAM, IO); ROM is const and excluded.
-        regions = [
-            d
-            for d in (session.memory_maps or [])
-            if d.len and d.ptr is not None and not d.flags & MemoryDescriptorFlag.CONST
-        ]
 
         def read(addr: int, n: int) -> bytes:
             if not 0 < n <= 0x10000:
@@ -80,10 +74,14 @@ def serve(core: str, rom: str, options: dict[str, str], battery: str | None = No
 
         def ram_hash() -> str:
             h = hashlib.sha256()
-            for mem_id in (2, 0):  # RETRO_MEMORY_SYSTEM_RAM, RETRO_MEMORY_SAVE_RAM
-                view = session.core.get_memory(mem_id)
-                if view is not None:
-                    h.update(view)
+            gba = [d for d in regions if d.start in (0x02000000, 0x03000000)]  # EWRAM, IWRAM
+            if gba:  # mGBA's SYSTEM_RAM is only the first 32 KiB of EWRAM, so hash both work RAMs whole
+                for d in sorted(gba, key=lambda d: d.start):
+                    h.update(d.view)
+            elif (view := session.core.get_memory(2)) is not None:  # RETRO_MEMORY_SYSTEM_RAM
+                h.update(view)
+            if (view := session.core.get_memory(0)) is not None:  # RETRO_MEMORY_SAVE_RAM
+                h.update(view)
             return h.hexdigest()
 
         if battery:
@@ -95,6 +93,13 @@ def serve(core: str, rom: str, options: dict[str, str], battery: str | None = No
             save[:] = data
         # SameBoy refuses to serialize until the first frame has run, so run it now: every state op then works.
         session.run()
+        # Readable regions: every non-const memory descriptor (RAM, VRAM, OAM, IO); ROM is const and excluded. Taken
+        # after the first frame: mGBA publishes its memory map during the first retro_run, not at load.
+        regions = [
+            d
+            for d in (session.memory_maps or [])
+            if d.len and d.ptr is not None and not d.flags & MemoryDescriptorFlag.CONST
+        ]
         av = session.core.get_system_av_info()
         info = session.core.get_system_info()
         while True:

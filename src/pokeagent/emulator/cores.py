@@ -14,7 +14,10 @@ from pathlib import Path
 ARCHIVE_URL = "https://buildbot.libretro.com/stable/1.22.2/linux/x86_64/RetroArch_cores.7z"
 ARCHIVE_SHA256 = "4b7ed8dc97d4bf035fce182c64b5658c7662e2e9e5d42129538afbd4b6096307"
 MEMBER_DIR = "RetroArch-Linux-x86_64/RetroArch-Linux-x86_64.AppImage.home/.config/retroarch/cores/"
-CORES = {"sameboy": ("sameboy_libretro.so", "2de48824e35a276695cd5d7c7293926e4e0920a09c3f4c0bd6c53eba350799fc")}
+CORES = {
+    "sameboy": ("sameboy_libretro.so", "2de48824e35a276695cd5d7c7293926e4e0920a09c3f4c0bd6c53eba350799fc"),
+    "mgba": ("mgba_libretro.so", "564c32a7214fe52f7d3b7ead5fbe70a7e45b5ccb3b52da2c07bc1b6149de75a5"),
+}
 
 
 def cores_dir() -> Path:

@@ -961,7 +961,7 @@ def test_play_by_hand_keeps_an_in_game_save_and_leaves_the_run_alone(game, rom_p
     out = tmp_path / "mine.sav"
 
     def play_with(script):
-        monkeypatch.setattr(play_module, "_viewer", lambda watch, web: (Hands(script), None))
+        monkeypatch.setattr(play_module, "_viewer", lambda watch, web, core="sameboy": (Hands(script), None))
         return play_module.play_by_hand(run_dir, tmp_path, out=out, force=True)
 
     assert play_with([("down", 20), (None, 20)]) == "you did not save in game; nothing written"
@@ -993,7 +993,7 @@ def test_play_by_hand_finishes_on_ctrl_c_and_still_reads_the_save(game, rom_path
             return steps.pop(0) if steps else frozenset()
 
     hands.__class__ = CtrlC
-    monkeypatch.setattr(play_module, "_viewer", lambda watch, web: (hands, None))
+    monkeypatch.setattr(play_module, "_viewer", lambda watch, web, core="sameboy": (hands, None))
     out = tmp_path / "mine.sav"
     assert play_module.play_by_hand(run_dir, tmp_path, out=out) == "you did not save in game; nothing written"
     assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
@@ -1020,3 +1020,23 @@ def test_runs_are_listed_with_where_their_game_stands(game, rom_path, tmp_path, 
     lines = capsys.readouterr().out.splitlines()
     assert lines[0] == "20260101-000000  stopped; 0 sessions, 0 actions; not started"
     assert lines[1].startswith(played.name) and lines[1].endswith("Reds House 2F, 0 badges, no Pokémon yet")
+
+
+def test_reads_stay_in_the_adapters_ram_and_cross_the_workers_read_limit():
+    from types import SimpleNamespace
+
+    calls = []
+
+    def read(address, n):
+        calls.append((address, n))
+        return bytes(n)
+
+    emu = SimpleNamespace(info={"fps": 60.0}, read=read)
+    gba = play_module.Game(emu, SimpleNamespace(RAM_RANGES=((0x02000000, 0x40000), (0x03000000, 0x8000))))
+    assert len(gba.peek(0x02000000, 0x24000)) == 0x24000
+    assert calls == [(0x02000000, 0x10000), (0x02010000, 0x10000), (0x02020000, 0x4000)]
+    for address, length in ((0x08000000, 4), (0x00000000, 4), (0x02040000, 1), (0x0203FFFF, 2), (0x03007FFF, 2)):
+        with pytest.raises(ValueError, match="not in this game's RAM"):
+            gba.peek(address, length)
+    plain = play_module.Game(emu, SimpleNamespace())  # an adapter without ranges (Game Boy): the worker decides
+    assert plain.peek(0xC000, 4) == bytes(4)

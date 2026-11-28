@@ -175,8 +175,8 @@ class GameServer:
 
         @tool
         async def press(button: str, ctx: Context, times: int = 1) -> list | str:
-            """Press a button (a, b, start, select, up, down, left, right) `times` times (1-10), waiting briefly after
-            each press. One action."""
+            """Press a button (a, b, start, select, up, down, left, right; also l, r on the Game Boy Advance) `times`
+            times (1-10), waiting briefly after each press. One action."""
             return await act(ctx, "press", button=button, times=times)
 
         @tool
@@ -276,8 +276,9 @@ class GameServer:
 
         @tool
         async def mem_read(address: int, ctx: Context, length: int = 1) -> str:
-            """Read `length` (1-64) bytes of the game's memory from `address`, as hex: work RAM C000-DFFF, high RAM
-            FF80-FFFE, cartridge RAM A000-BFFF and the other RAM regions, never ROM. Read-only and free."""
+            """Read `length` (1-64) bytes of the game's memory from `address`, as hex. Game Boy: work RAM C000-DFFF,
+            high RAM FF80-FFFE, cartridge RAM A000-BFFF and the other RAM regions; Game Boy Advance: EWRAM 0x02000000
+            and IWRAM 0x03000000. Never ROM. Read-only and free."""
             self._session(ctx)
             if not 1 <= length <= capabilities.MAX_READ:
                 raise ToolError(f"length must be 1..{capabilities.MAX_READ}")
@@ -534,7 +535,8 @@ class GameServer:
 
         @dev
         async def mem_snapshot(name: str, ctx: Context) -> str:
-            """Keep a copy of work RAM (C000-DFFF) under `name` (at most 16 per session) to compare later."""
+            """Keep a copy of work RAM (Game Boy C000-DFFF, GBA EWRAM) under `name` (at most 16 per session) to compare
+            later."""
             return await on_bench(ctx, Bench.snapshot, name)
 
         @dev

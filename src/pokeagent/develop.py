@@ -17,7 +17,7 @@ NAME = re.compile(r"[a-z][a-z0-9_]{1,39}")
 WS_FILES, WS_BYTES = 200, 5 << 20  # workspace files (fixtures excluded)
 MAX_FIXTURES, FIXTURE_BYTES = 20, 1 << 20
 MAX_SNAPSHOTS = 16
-WRAM = (0xC000, 0x2000)  # work RAM: the snapshot, diff and search range
+WRAM = (0xC000, 0x2000)  # work RAM: the snapshot, diff and search range (an adapter's `WORK_RAM` replaces it)
 DEV_BUDGET = 200  # controller actions per develop session
 TOOL_FILES = ("manifest.json", "tool.py", "test_tool.py")
 
@@ -83,17 +83,22 @@ class Bench:
 
     # ---- memory, read-only ----
 
+    def _wram(self) -> tuple[int, int]:
+        return getattr(getattr(self.game, "adapter", None), "WORK_RAM", WRAM)
+
     def snapshot(self, name: str) -> str:
         _check_name(name)
         if name not in self.snapshots and len(self.snapshots) >= MAX_SNAPSHOTS:
             raise ValueError(f"at most {MAX_SNAPSHOTS} snapshots per session")
-        self.snapshots[name] = self.game.peek(*WRAM)
-        return f"saved work RAM ({WRAM[0]:#06x}-{WRAM[0] + WRAM[1] - 1:#06x}) as {name}"
+        self.snapshots[name] = self.game.peek(*self._wram())
+        start, size = self._wram()
+        return f"saved work RAM ({start:#06x}-{start + size - 1:#06x}) as {name}"
 
     def diff(self, before: str, after: str = "now") -> str:
         old, new = self._snapshot(before), self._snapshot(after)
-        changed = [i for i in range(WRAM[1]) if old[i] != new[i]]
-        lines = [f"{WRAM[0] + i:#06x}: {old[i]:#04x} -> {new[i]:#04x}" for i in changed[:200]]
+        start, size = self._wram()
+        changed = [i for i in range(size) if old[i] != new[i]]
+        lines = [f"{start + i:#06x}: {old[i]:#04x} -> {new[i]:#04x}" for i in changed[:200]]
         more = f"\n(and {len(changed) - 200} more)" if len(changed) > 200 else ""
         return f"{len(changed)} byte(s) differ\n" + "\n".join(lines) + more
 
@@ -103,11 +108,12 @@ class Bench:
         if width not in (1, 2) or not isinstance(value, int) or not 0 <= value < 256**width:
             raise ValueError("value must fit in `width` (1 or 2) bytes")
         data = self._snapshot("now")
+        start, size = self._wram()
         hits = []
-        for i in range(WRAM[1] - width + 1):
+        for i in range(size - width + 1):
             raw = data[i : i + width]
             if value in (int.from_bytes(raw, "little"), int.from_bytes(raw, "big")):
-                hits.append(WRAM[0] + i)
+                hits.append(start + i)
         if among is not None:
             hits = [a for a in hits if a in set(among)]
         shown = ", ".join(f"{a:#06x}" for a in hits[:100])
@@ -115,7 +121,7 @@ class Bench:
 
     def _snapshot(self, name: str) -> bytes:
         if name == "now":
-            return self.game.peek(*WRAM)
+            return self.game.peek(*self._wram())
         if name not in self.snapshots:
             raise ValueError(f"no snapshot {name}; taken: {', '.join(self.snapshots) or 'none'}")
         return self.snapshots[name]

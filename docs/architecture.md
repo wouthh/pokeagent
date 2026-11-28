@@ -53,8 +53,10 @@ Thin interfaces exist only at these seams, each with one implementation for now:
   - the client enforces the caps and a per-call deadline, and kills the process group if either is broken.
 - Operations:
   - `info`, `run(buttons, frames)` (hold, then release), `frame` (RGB bytes);
-  - `read(addr, n)`: non-const memory-map regions only, so ROM is refused;
-  - `ram_hash`: sha256 of system RAM plus save RAM;
+  - `read(addr, n)`: non-const memory-map regions only, so ROM is refused; the regions are taken after the first
+    frame, because mGBA publishes its memory map during the first `retro_run`, not at load;
+  - `ram_hash`: sha256 of system RAM plus save RAM; on a GBA core, of all of EWRAM and IWRAM plus save RAM, since
+    mGBA's `SYSTEM_RAM` id is only the first 32 KiB of EWRAM;
   - `save_ram`: the cartridge's battery RAM, read-only (what a `.sav` file holds);
   - `save_state` / `load_state`.
 - There is no write operation. A `.sav` given when the worker starts (`Emulator(..., battery=PATH)`, bound
@@ -105,6 +107,48 @@ read from the user's ROM at runtime, so no game text is stored in the repository
   the default objective's check (the Hall of Fame map).
 - Tests boot a new game on the user's own ROM (`POKEAGENT_ROM`, or a supported dump in the checkout's ignored
   `roms/` folder) and skip without one.
+
+## Game adapter: Pokémon Gen 3 *(Ruby, Sapphire, Emerald, FireRed, LeafGreen; mGBA)*
+
+`games/pokemon_gen3.py` with `games/gen3_tables.py`. RAM addresses come from the pret pokeruby, pokeemerald and
+pokefirered symbol files, by family (`rs`, `e`, `frlg`); names come from the user's ROM at runtime.
+
+- **Recognition.** The header game code (AXVE, AXPE, BPEE, BPRE, BPGE) picks the family; `find_tables` finds the
+  species, move, item, type and ability names, the natures and the map-name table by the text of their first two
+  entries and their stride, and the base stats at the family's fixed distance from the species names, confirmed by
+  their shape. `ROMS` lists the dumps checked; an unlisted dump that scans is accepted.
+- **RAM layouts** (`LAYOUTS`): fixed save blocks in Ruby and Sapphire, pointers to them in Emerald and FireRed/LeafGreen
+  (the pointers move, so every `state` dereferences them). The layout probe checks that `gMain.callback2` is a ROM
+  pointer and the save block pointers point into EWRAM; a hack that moved RAM (ROWE) then gets a state that says so
+  instead of garbage. Hacks whose names are not in capitals (ROWE, Radical Red) are not recognised at all.
+- **Pokémon:** `decode_mon` decrypts the four data blocks (order by personality mod 24, XOR with personality and
+  trainer id, checksum) and reports species, level, HP, status, moves with PP and PP Ups, experience, stats, EVs, IVs,
+  nature, ability, held item and types (from the base stats). Money and bag quantities are XORed with the save block
+  key in Emerald and FireRed/LeafGreen. Badges, Pokémon-get and the Hall of Fame (`FLAG_SYS_GAME_CLEAR`, the default
+  check) are event flags; the Pokédex counts are popcounts of the owned and seen bits.
+- **Screen modes.** `overworld`, `dialog`, `menu`, `battle` with `cursor`, `yes_no` and `waiting` as in Gen 1; the
+  text is the paragraph being printed, read through the text printer's next-character pointer (Emerald, FireRed,
+  LeafGreen: 32 printers with a state, 1-3 = waiting) or the message window (Ruby, Sapphire: state 5, 8, 9). A message
+  that has finished printing still waits for A or B while the script engine's native wait is `WaitForAorBPress` (its
+  pointer is stale unless the engine's mode is 2). Menus and yes/no prompts are tasks, and the battle's action and move
+  menus are `gBattlerControllerFuncs[0]`: `FUNCTIONS` holds the ROM function addresses of the exact ROMs they were read
+  from (pret symbols; the Sapphire dump's found by their opening bytes). Any other ROM, or a hack, falls back to RAM-only
+  signals (printer and window states, script mode, `inBattle`), with which `advance_text` presses only on printer
+  waits and never answers anything it cannot tell is a prompt.
+- **`advance_text` presses B, not A.** Both continue a message, but A talks to the person in front of you again once
+  the box has closed. It stops at any menu or yes/no and waits through a running script (a cutscene).
+- **Walk grid.** The game's own map grid (`gBackupMapLayout`/`VMap`, with the 7-tile border of the neighbouring maps, so
+  a path can cross an edge): collision bits 10-11, the tilesets' metatile behaviours read from the ROM (ledges are
+  one-way hops over two tiles, water needs Surf and waterfalls are blocked), people from the object events, warps
+  from the map header's events. Walking is the same contract as Gen 1.
+- **Saves.** `save_game` goes START, SAVE, YES (the cursor index follows the flags that add Start menu entries);
+  `save_complete` checks the 128 KiB flash image: one of the two slots with all 14 sectors, signature, ids and checksums.
+- **Worker and tools.** The agent's memory reads and develop snapshots are limited to EWRAM and IWRAM on GBA
+  (`RAM_RANGES`); the buttons include L and R.
+- Natural play: the three starters of the family, all real types as team types, and side quests in neutral words;
+  no glitches are named.
+- Tests: `tests/test_gen3.py` builds and encrypts Pokémon, saves and grids from bytes (no ROM), and boots each of the
+  five dumps found in `roms/`.
 
 ## Play loop *(implemented, phase 4)*
 
@@ -563,6 +607,25 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
     `modelUsage`, `num_turns`, `terminal_reason`, `api_error_status`.
 - Without input on stdin the CLI waits 3 s; the provider passes `stdin=DEVNULL`.
 
+**GBA (mGBA 0.11-dev `c758314` from the same archive; spikes 2026-11-28)**
+
+- `mgba_libretro.so` sha256 `564c32a7214fe52f7d3b7ead5fbe70a7e45b5ccb3b52da2c07bc1b6149de75a5`. 240×160, 59.7275 fps,
+  serialized state 528448 bytes, about 1500 emulated fps in the sandbox. Defaults need no options and no BIOS file.
+- The memory map (11 descriptors) exists only after the first `retro_run`: IWRAM 0x03000000 (32 KiB), EWRAM 0x02000000
+  (256 KiB), save flash 0x0E000000 (128 KiB, readable), IO, palette, VRAM, OAM, BIOS and ROM (const).
+  `get_memory(SYSTEM_RAM)` is EWRAM's first 32 KiB, not IWRAM.
+- `save_ram` is a standard 128 KiB flash image: after one in-game save, 14 sectors of 4 KiB with the 0x08012025
+  signature, ids 0-13 and checksums (data 3968 bytes + footer: id, checksum, signature, counter). It loads back as a
+  battery file, and the game offers CONTINUE.
+- Pret symbols: Ruby rev 1 = Sapphire (all revisions), FireRed = LeafGreen (both revisions) in RAM; only ROM addresses
+  differ. The FireRed and LeafGreen save blocks are at different addresses in one run (LeafGreen's differ by 0x48), so
+  the pointers are always dereferenced.
+- Text: Emerald and FireRed/LeafGreen print through `sTextPrinters`; Ruby and Sapphire through a message window struct.
+  `gMain.inBattle` is bit 1 of a byte at gMain+0x439 (Emerald, FireRed/LeafGreen) or +0x43D (Ruby, Sapphire).
+- Radical Red (checked by hand, not supported): FireRed's save block pointers and party count addresses, `encryptionKey`
+  0, unencrypted party Pokémon in block order GAEM with a zero checksum, species names at 0x1719ba0 with 11-byte Title
+  Case entries, 17-byte move names. ROWE: save block pointers at 0x03004b80 (block 2) and 0x03004b84 (block 1).
+
 ## Decisions
 
 - **2026-11-27: Unchanged upstream libretro cores through libretro.py, no emulator fork.** One Python API across
@@ -694,3 +757,19 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
   worker copies the file into battery RAM once, before the first frame, from a read-only bind, the way any frontend
   loads a save; there is still no operation that writes memory while a game runs, and no tool reaches this one. The
   file is checked as a whole Red/Blue save first and never changed.
+- **2026-11-28: mGBA from the same pinned archive; the Gen 3 adapter scans the ROM.** `cores.py` pins `mgba_libretro.so`
+  next to SameBoy (one download gets both). mGBA needs no options and boots with its built-in BIOS, so no BIOS file
+  exists anywhere. Three findings shape the worker: the memory map appears only after the first frame (regions are
+  taken then), `get_memory(SYSTEM_RAM)` is only EWRAM's first 32 KiB (so `ram_hash` hashes both work RAMs), and EWRAM
+  is larger than one read (reads are chunked, the agent is limited to EWRAM and IWRAM).
+- **2026-11-28: The Sapphire dump differs from pret.** The supplied Sapphire (header revision 2, sha1 `79bbb886…`)
+  matches none of pret's three Sapphire hashes: its tables sit at other offsets and part of its code is shifted. The
+  RAM layout is the same as Ruby's, so only ROM addresses are affected; names are scanned, and its few function
+  addresses were taken from the same code found by its opening bytes. Never key ROM addresses by game code.
+- **2026-11-28: RAM-only signals first, function addresses as optional data.** What a menu or yes/no prompt is cannot
+  be told from RAM alone, so the exact ROMs carry a few function pointers; everything else (text, battle, scripts) uses
+  RAM facts, and a ROM without the data degrades to a conservative `advance_text` instead of guessing.
+- **2026-11-28: ROWE and Radical Red are not supported.** ROWE moves the game's RAM (its save block pointers sit at
+  other addresses); Radical Red keeps FireRed's RAM but stores Pokémon unencrypted in a fixed block order with other
+  table layouts and capitalisation. Both have Title Case names, so the scanner does not recognise them; a hack that
+  keeps the capitals but moves RAM stops at the layout probe.
