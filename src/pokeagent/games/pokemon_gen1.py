@@ -213,6 +213,16 @@ class Grid:
 class Gen1:
     """Reads state and drives inputs for one English Red/Blue ROM inside an `Emulator`."""
 
+    ROMS, FAMILY, CORE, CORE_OPTIONS = ROMS, FAMILY, CORE, CORE_OPTIONS
+    DEFAULT_OBJECTIVE, DEFAULT_CHECK, OBSERVATIONS = DEFAULT_OBJECTIVE, DEFAULT_CHECK, OBSERVATIONS
+    STARTERS, TEAM_TYPES, SIDE_QUESTS, GLITCHES = STARTERS, TEAM_TYPES, SIDE_QUESTS, GLITCHES
+
+    decode = staticmethod(decode)
+
+    @classmethod
+    def recognises(cls, rom: bytes) -> bool:
+        return hashlib.sha1(rom).hexdigest() in cls.ROMS
+
     def __init__(self, rom: bytes):
         sha1 = hashlib.sha1(rom).hexdigest()
         if sha1 not in ROMS:

@@ -15,7 +15,8 @@ first use case, not an architectural constraint. Design and decisions: [docs/arc
   - `sandbox.py`: bwrap argv, in-namespace rlimits, the fail-closed probe (`ensure()`).
   - `emulator/`: `cores.py` (pinned core download and checksum), `worker.py` (one core per sandboxed process, JSON
     line + bytes protocol, no memory-write op), `client.py` (`Emulator`, the orchestrator's handle).
-  - `games/pokemon_gen1.py`: the Red/Blue adapter (state, screen modes, walk grid, macro actions, scoring).
+  - `games/__init__.py`: `identify(rom)` and the adapter contract every game follows; `games/pokemon_gen1.py`: the
+    Red/Blue adapter (state, screen modes, walk grid, macro actions, scoring).
   - `server.py`: the `game` MCP server (token and Host checks, tools, budgets). `play.py`: runs, the live `Game`,
     the session loop, play styles and run variety, `runs`, `view` and `export-sav`. `viewer.py`: the game window, the `--web` page, the `web` run browser and the keyboard map for `view --keyboard`. `prompts/play.md`: the play-mode system prompt.
   - `stats.py`: `status`, `stats [--compare]` and the viewer panel, all from events.

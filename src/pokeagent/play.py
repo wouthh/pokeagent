@@ -28,20 +28,7 @@ from pokeagent.agents.claude_cli import ProviderError, SessionResult, SessionSpe
 from pokeagent.capabilities import Registry
 from pokeagent.emulator.client import Emulator, EmulatorError
 from pokeagent.emulator.cores import core_path
-from pokeagent.games.pokemon_gen1 import (
-    CORE,
-    CORE_OPTIONS,
-    DEFAULT_CHECK,
-    DEFAULT_OBJECTIVE,
-    FAMILY,
-    GLITCHES,
-    OBSERVATIONS,
-    SIDE_QUESTS,
-    STARTERS,
-    TEAM_TYPES,
-    Gen1,
-)
-from pokeagent.games.pokemon_gen1 import decode as decode_text
+from pokeagent.games import identify
 from pokeagent.memory import Memory, describe_knowledge
 from pokeagent.server import GameServer
 
@@ -115,7 +102,7 @@ class Game:
     def __init__(
         self,
         emu: Emulator,
-        adapter: Gen1,
+        adapter,
         speed: float | None = None,
         viewer=None,
         start=None,
@@ -213,7 +200,7 @@ class Game:
         }
 
     def _decode(self, spec: dict):
-        return capabilities.decode(spec, self.emu.read(spec["address"], spec["length"]), decode_text)
+        return capabilities.decode(spec, self.emu.read(spec["address"], spec["length"]), self.adapter.decode)
 
     def _observations(self) -> dict:
         """Builtin and the run's own observations, for macro conditions (call under the lock)."""
@@ -350,36 +337,36 @@ def new_run(
         raise ValueError(f"unknown style {style!r}; choose from {', '.join(STYLES)}")
     start = None
     if source:
-        source_meta, rom, _ = _run_rom(source)
-        if (source_meta["core"], source_meta["core_options"]) != (CORE, CORE_OPTIONS):
+        source_meta, rom, adapter = _run_rom(source)
+        if (source_meta["core"], source_meta["core_options"]) != (adapter.CORE, adapter.CORE_OPTIONS):
             raise ValueError(f"run {source.name} used another core or core options; start it from power-on instead")
         if (start := latest_state(source)) is None:
             raise ValueError(f"run {source.name} has no game to start from yet")
     data = rom.read_bytes()
-    adapter = Gen1(data)  # refuses unsupported ROMs
+    adapter = identify(data)  # refuses unsupported ROMs
     if sav:
         if not adapter.save_complete(saved := sav.read_bytes()):
-            raise ValueError(f"{sav} is not a whole Red/Blue save (32 KB with the game's checksum)")
-        with Emulator(core_path(CORE), rom, options=CORE_OPTIONS, battery=sav) as emu:
+            raise ValueError(f"{sav} is not a whole in-game save of {adapter.title} (size and the game's checksum)")
+        with Emulator(core_path(adapter.CORE), rom, options=adapter.CORE_OPTIONS, battery=sav) as emu:
             if emu.save_ram() != saved:
                 raise ValueError(f"the cartridge did not take {sav}")
             start = emu.save_state()  # power-on with the save in the cartridge
     if success is not None:
-        objectives.validate(success, [name for name in OBSERVATIONS if name != "in_game"])
+        objectives.validate(success, [name for name in adapter.OBSERVATIONS if name != "in_game"])
     (data_dir / "runs").mkdir(parents=True, exist_ok=True, mode=0o700)
     earlier = [json.loads(path.read_text()) for path in (data_dir / "runs").glob("*/run.json")]
     run_dir = data_dir / "runs" / time.strftime("%Y%m%d-%H%M%S")
     run_dir.mkdir(mode=0o700)
     meta = {
-        "objective": objective or DEFAULT_OBJECTIVE,
-        "check": None if objective else DEFAULT_CHECK,
+        "objective": objective or adapter.DEFAULT_OBJECTIVE,
+        "check": None if objective else adapter.DEFAULT_CHECK,
         "success": success,
         "game": adapter.title,
-        "family": FAMILY,
+        "family": adapter.FAMILY,
         "rom": str(rom.resolve()),
         "rom_sha1": hashlib.sha1(data).hexdigest(),
-        "core": CORE,
-        "core_options": CORE_OPTIONS,
+        "core": adapter.CORE,
+        "core_options": adapter.CORE_OPTIONS,
         "created": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "style": style,
         "glitches": glitches,
@@ -392,25 +379,25 @@ def new_run(
     return run_dir
 
 
-def draw_variety(adapter: Gen1, earlier: list[dict]) -> dict:
+def draw_variety(adapter, earlier: list[dict]) -> dict:
     """A natural run's draw: the starter the fewest `earlier` runs drew, three team types besides the starter's, a
     nickname theme and three side quests."""
     drawn = [meta["variety"]["starter"] for meta in earlier if meta["variety"]]
-    starters = {adapter.species_name(index): types for index, types in STARTERS.items()}
+    starters = {adapter.species_name(index): types for index, types in adapter.STARTERS.items()}
     fewest = min(drawn.count(name) for name in starters)
     starter = random.choice([name for name in starters if drawn.count(name) == fewest])
-    types = random.sample([t for t in TEAM_TYPES if t not in starters[starter]], 3)
+    types = random.sample([t for t in adapter.TEAM_TYPES if t not in starters[starter]], 3)
     return {
         "starter": starter,
         "team_types": [adapter.types[t] for t in types],
         "nicknames": random.choice(NICKNAME_THEMES),
-        "side_quests": random.sample(SIDE_QUESTS, 3),
+        "side_quests": random.sample(adapter.SIDE_QUESTS, 3),
     }
 
 
-def style_text(meta: dict, party: list[dict]) -> list[str]:
+def style_text(meta: dict, party: list[dict], glitches: str) -> list[str]:
     """The brief's play style lines: the natural style's house rules with the run's variety and team facts, and the
-    glitch allowance. None for a direct run without glitches."""
+    game's `glitches` allowance when the run allows them. None for a direct run without glitches."""
     lines = []
     if variety := meta["variety"]:
         types = variety["team_types"]
@@ -445,7 +432,7 @@ def style_text(meta: dict, party: list[dict]) -> list[str]:
                 + "."
             )
     if meta["glitches"]:
-        lines.append(GLITCHES)
+        lines.append(glitches)
     return lines
 
 
@@ -641,7 +628,8 @@ class Runner:
         observations = self.game.observations()
         lines = [f"Objective: {self.meta['objective']}", *self._checks(observations), ""]
         state = self.game.progress_state()
-        if style := style_text(self.meta, state["party"] if state["in_game"] else []):
+        party = state["party"] if state["in_game"] else []
+        if style := style_text(self.meta, party, self.game.adapter.GLITCHES):
             lines += [*style, ""]
         plays = [e for e in self.memory.events("session_start", limit=-1) if e["data"].get("mode") != "develop"]
         last_start = plays[-1]["id"] if plays else 0  # what happened since the last play session began
@@ -1014,14 +1002,14 @@ def restore_notice(data: dict) -> str:
     return "\n".join(lines)
 
 
-def _run_rom(run_dir: Path) -> tuple[dict, Path, Gen1]:
+def _run_rom(run_dir: Path) -> tuple[dict, Path, object]:
     """The run's metadata, ROM path and adapter, once the ROM is checked to be the one the run started with."""
     meta = json.loads((run_dir / "run.json").read_text())
     rom = Path(meta["rom"])
     data = rom.read_bytes()
     if hashlib.sha1(data).hexdigest() != meta["rom_sha1"]:
         raise ValueError(f"{rom} is no longer the ROM this run started with")
-    return meta, rom, Gen1(data)
+    return meta, rom, identify(data)
 
 
 def _states(run_dir: Path, memory: Memory, checkpoint: str | None) -> list[tuple[str, bytes]]:
