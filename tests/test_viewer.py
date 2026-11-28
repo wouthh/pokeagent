@@ -88,7 +88,7 @@ def runs(tmp_path, monkeypatch):
     faked: a state's first byte is its grey level."""
     from pokeagent import play
 
-    meta = {"objective": "win", "rom_sha1": "x", "family": "f", "check": None, "success": None}
+    meta = {"objective": "win", "rom_sha1": "x", "family": "f", "check": None, "success": None, "style": "natural", "glitches": False, "from": None}
     for name in ("r1", "r2"):
         (tmp_path / "runs" / name).mkdir(parents=True)
         (tmp_path / "runs" / name / "run.json").write_text(json.dumps(meta))
