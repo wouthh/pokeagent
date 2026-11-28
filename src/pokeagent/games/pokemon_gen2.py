@@ -112,6 +112,7 @@ RAM_LAYOUTS = {
         "ENEMY": 0xD0EF,
         "CUR_OT_MON": 0xCB41,
         "TIME_OF_DAY": 0xD157,
+        "SCRIPT_RUNNING": 0xD15F,  # 0xFF while a script (encounter, trainer, dialog, warp) runs
     },
     "crystal": {
         "TILEMAP": 0xC4A0,
@@ -143,6 +144,7 @@ RAM_LAYOUTS = {
         "ENEMY": 0xD206,
         "CUR_OT_MON": 0xC663,
         "TIME_OF_DAY": 0xD269,
+        "SCRIPT_RUNNING": 0xD438,
     },
 }
 SPECIES_COUNT, EGG, PARTY_MON_SIZE = 251, 0xFD, 0x30
@@ -530,6 +532,30 @@ class Gen2(Gen1):
     def press(self, emu: Emulator, button: str, hold: int = 4, wait: int = 12) -> None:
         """Menus here drop presses shorter than about four frames."""
         super().press(emu, button, hold, wait)
+
+    def step(self, emu: Emulator, direction: str) -> str:
+        """The shared step, then a wait while a script runs: a wild encounter starts a ~140-frame transition in which
+        the battle flag is still 0, the screen still looks like the overworld and the map's block memory is being
+        overwritten, so a result taken then reads as no battle and the next `grid` as garbage."""
+        outcome = super().step(emu, direction)
+        if outcome not in ("moved", "map_changed", "blocked"):  # an encounter can also start before the step is taken
+            return outcome
+        script = lambda: emu.read(self.ram.SCRIPT_RUNNING, 1)[0]  # noqa: E731
+        shown = lambda: self.screen_mode(self.screen_tiles(emu), False)["mode"] != "overworld"  # noqa: E731
+        for _ in range(6):  # the encounter script may start a few frames after the step settled
+            if script():
+                break
+            emu.run([], 4)
+        if script():
+            for _ in range(100):
+                if emu.read(self.ram.IS_IN_BATTLE, 1)[0] or not script() or shown():
+                    break
+                emu.run([], 4)
+            if emu.read(self.ram.IS_IN_BATTLE, 1)[0]:
+                return "battle"
+            if outcome != "map_changed" and shown():
+                return "dialog"
+        return outcome
 
     def _position(self, emu: Emulator) -> tuple[int, int, int]:
         group, number, y, x = emu.read(self.ram.MAP_GROUP, 4)

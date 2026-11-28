@@ -15,5 +15,8 @@ touches:
 
 ## Decided
 Remove the Gen 2 WRAM bank guard (this overrides the learning that state is read only while SVBK selects bank 1). SameBoy's memory map points D000 at bank 1 for every SVBK, checked over 4000 frames in Crystal (D000 equalled bank 1 in all 211 samples with SVBK 5 or 6 and differing banks). The guard turned a running game into "no game" for the frames when the game switches banks 5/6 in (START menu, battle start).
+Gen2.step waits while wScriptRunning (G D15F, C D438) is 0xFF: an encounter keeps wBattleMode at 0 for ~140 frames while the overworld block memory (the grid source) is overwritten, so walk_to saw unreachable and a garbage crop. The step can also come back blocked with the script already running (the encounter starts before the step is taken).
+
 ## Watch out
 SYSTEM_RAM has all 8 banks in order (bank n at n*0x1000) if another bank is ever needed, but banks 2-7 are already at 0x10000+.
+Timing changes the encounter RNG: a reproduction that fails once may not fail after you add frames; use many walk_to calls over the grass at Route 29 (50..53, 12..13).

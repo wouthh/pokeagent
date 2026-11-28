@@ -520,3 +520,35 @@ def test_a_running_game_never_reads_as_no_game_while_banks_switch(game):
         state = gen2.state(emu)
         assert state["in_game"] and state["player_name"] and state["map_id"] == 0x1807
     assert not gen2.crystal or banks & {2, 3, 4, 5, 6, 7}  # the test saw the switch it is about
+
+
+class Encounter(Memory):
+    """A fake emulator whose script starts the battle `after` frames from now (0: no battle, the script just ends)."""
+
+    def __init__(self, after: int, script_from: int = 0):
+        super().__init__()
+        self.frames, self.after, self.script_from = 0, after, script_from
+
+    def run(self, buttons, frames):
+        for _ in range(frames):
+            self.frames += 1
+            ram = RAM_LAYOUTS["gold-silver"]
+            self.mem[ram["SCRIPT_RUNNING"]] = 0xFF if self.script_from <= self.frames < max(self.after, 1) + 30 else 0
+            if self.after and self.frames >= self.after:
+                self.mem[ram["IS_IN_BATTLE"]] = 1
+
+
+@pytest.mark.parametrize("raw", ["moved", "blocked"])
+@pytest.mark.parametrize("script_from", [0, 12])
+def test_step_waits_out_an_encounter_transition(monkeypatch, raw, script_from):
+    # The battle flag stays 0 for ~140 frames after the encounter script starts, and the block memory is overwritten:
+    # a step result taken then said "blocked"/"moved" and the next walk_to read a garbage grid as unreachable.
+    monkeypatch.setattr(Gen1, "step", lambda self, emu, direction: raw)
+    g, emu = fake_adapter(), Encounter(after=140, script_from=script_from)
+    assert g.step(emu, "left") == "battle" and emu.frames >= 140
+
+
+def test_step_returns_the_plain_outcome_when_no_script_runs(monkeypatch):
+    monkeypatch.setattr(Gen1, "step", lambda self, emu, direction: "moved")
+    g, emu = fake_adapter(), Encounter(after=0, script_from=10**6)
+    assert g.step(emu, "left") == "moved" and emu.frames <= 30
