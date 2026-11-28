@@ -15,6 +15,12 @@ language. It keeps what it learns, and it builds and validates its own tools whe
   dump that matches no pret build, which works the same way), Emerald (`f3ae0881…`), FireRed 1.1 (`dd5945db…`) and
   LeafGreen 1.1 (`7862c67b…`). mGBA boots them with its built-in BIOS, so no BIOS file is needed. ROM hacks that
   move the games' RAM or rename their tables (ROWE, Radical Red) are refused or stop with a clear message.
+- **Gen 2:** Pokémon Gold (sha1 `d8b8a3600a465308c9953dfa04f0081c05bdcb94`), Silver
+  (`49b163f7e57702bc939d642a18f591de55d92dae`) and Crystal 1.1 (`f2f52230b536214ef7c9924f483392993e226cfb`), English,
+  verified live. Other builds on their engine (Crystal 1.0 and the Australian release, hacks such as Crystal Clear) are
+  recognised by scanning the ROM and checked against the running game's memory, but unverified. The Spaceworld 1997
+  demo is a different engine and is not supported. Gen 2 runs on the Game Boy Color core model with the in-game clock on
+  emulated time.
 - **First use case:** Pokémon Red/Blue. The first long-term benchmark is finishing a whole
   playthrough without help.
 
@@ -149,6 +155,7 @@ three side quests. `--style direct` pursues the objective by the shortest route 
 `--glitches` (off by default) allows the game's known glitches done with ordinary controller input; on Red/Blue
 the brief names the Mew glitch, MissingNo. and item duplication and arbitrary code execution with item 8F. A
 glitch can reach the Hall of Fame check too, as in a glitched speedrun.
+On Gen 2 the allowance is generic: the brief names no particular glitch.
 
 `--from RUN` starts a new run from another run's latest game instead of power-on, and `--rom ROM --sav FILE`
 starts one from an in-game save made in any emulator (the agent picks CONTINUE). Neither the run nor the file
@@ -194,7 +201,10 @@ Runs ruff (lint and format), installs the pinned cores if missing, runs the test
 tests and the MIT-licensed [dmg-acid2](https://github.com/mattcurrie/dmg-acid2) test ROM), and fails if any ROM,
 save or state file is tracked. No game ROM is needed; with your own Red or Blue dump in `roms/` (ignored) or
 `POKEAGENT_ROM` set, the adapter tests also boot a new game and walk out of the player's house; Yellow, Blue Kaizo
-and the Gen 2 dumps there add the version and scanner tests.
+and the Gen 2 dumps there add the version and scanner tests. The Gen 2 tests (`tests/test_gen2.py`) read Gold,
+Silver, Crystal and Crystal Clear from `roms/` or from the folder `POKEAGENT_ROMS_DIR` names (file names
+`Pokemon Gold.gbc`, `Pokemon Silver.gbc`, `Pokemon Crystal.gbc`, `Pokemon Crystal Clear 2.5.1.gbc`) and skip any that
+is missing.
 
 ## Licence
 

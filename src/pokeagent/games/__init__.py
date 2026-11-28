@@ -16,9 +16,10 @@
 import hashlib
 
 from pokeagent.games.pokemon_gen1 import Gen1
+from pokeagent.games.pokemon_gen2 import Gen2
 from pokeagent.games.pokemon_gen3 import Gen3
 
-ADAPTERS = (Gen1, Gen3)
+ADAPTERS = (Gen1, Gen2, Gen3)
 
 
 def identify(rom: bytes):

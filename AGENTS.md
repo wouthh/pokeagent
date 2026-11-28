@@ -18,6 +18,8 @@ first use case, not an architectural constraint. Design and decisions: [docs/arc
   - `games/__init__.py`: `identify(rom)` and the adapter contract every game follows; `games/pokemon_gen1.py`: the
     Gen 1 adapter for Red, Blue, Yellow and engine hacks (state, screen modes, walk grid, macro actions, scoring);
     `games/gen1_tables.py` scans a ROM for its name and collision tables; the map-name files hold only constants.
+    `games/pokemon_gen2.py` and `games/gen2_tables.py` are the same for Gold, Silver, Crystal and their engine hacks
+    (`gen2_*_map_names.txt`: constants only).
   - `games/pokemon_gen3.py`: the Ruby, Sapphire, Emerald, FireRed and LeafGreen adapter (mGBA core); `games/gen3_tables.py`
     is its text encoding and ROM name-table scanner.
   - `server.py`: the `game` MCP server (token and Host checks, tools, budgets). `play.py`: runs, the live `Game`,

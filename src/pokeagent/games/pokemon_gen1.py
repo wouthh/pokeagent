@@ -147,13 +147,13 @@ DIRECTIONS = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
 FACING_CODES = {0x0: "down", 0x4: "up", 0x8: "left", 0xC: "right"}
 
 
-def decode(data: bytes) -> str:
+def decode(data: bytes, charmap: dict[int, str] = CHARMAP) -> str:
     """Game text to str; stops at the 0x50 terminator. Unknown codes become '·'."""
     out = []
     for b in data:
         if b == 0x50:
             break
-        out.append(CHARMAP.get(b, "·"))
+        out.append(charmap.get(b, "·"))
     return "".join(out)
 
 
@@ -162,9 +162,9 @@ def bcd(data: bytes) -> int:
     return int(digits) if digits.isdigit() else 0  # not BCD: power-on noise before a game is loaded
 
 
-def stat_line(values: list[int], hp: bool = False) -> str:
+def stat_line(values: list[int], hp: bool = False, names: tuple[str, ...] = ("Atk", "Def", "Spd", "Spc", "HP")) -> str:
     """Atk, Def, Spd, Spc (and HP) values as "Atk 9 Def 12 ...", the order party entries keep them in."""
-    return " ".join(f"{name} {value}" for name, value in zip(("Atk", "Def", "Spd", "Spc", "HP"), values, strict=False))
+    return " ".join(f"{name} {value}" for name, value in zip(names, values, strict=False))
 
 
 def dvs(first: int, second: int) -> list[int]:
@@ -287,7 +287,11 @@ class Gen1:
     DEFAULT_OBJECTIVE, DEFAULT_CHECK, OBSERVATIONS = DEFAULT_OBJECTIVE, DEFAULT_CHECK, OBSERVATIONS
     STARTERS, TEAM_TYPES, SIDE_QUESTS, GLITCHES = STARTERS, TEAM_TYPES, SIDE_QUESTS, GLITCHES
 
-    decode = staticmethod(decode)
+    CHARMAP, TILEMAP, WAIT_ROW, STEP_FRAMES, REACT_FRAMES = CHARMAP, TILEMAP, 16, 24, REACT_FRAMES
+
+    @classmethod
+    def decode(cls, data: bytes) -> str:
+        return decode(data, cls.CHARMAP)
 
     @classmethod
     def recognises(cls, rom: bytes) -> bool:
@@ -305,7 +309,7 @@ class Gen1:
         self.layout_checked = False  # set once a running game has confirmed (or replaced) the base game
         # first guess at the base game: Yellow keeps its name tables in bank 0x3A, Red and Blue in bank 7
         self._set_base("YELLOW" in header or tables["species"][0] == 0x3A)
-        self.species = [decode(self._rom(tables["species"], 190 * 10)[i * 10 : i * 10 + 10]) for i in range(190)]
+        self.species = [self.decode(self._rom(tables["species"], 190 * 10)[i * 10 : i * 10 + 10]) for i in range(190)]
         self.items = self._names(tables["items"], 0x61)
         self.moves = self._names(tables["moves"], 165)
         bank, _ = tables["types"]
@@ -351,7 +355,7 @@ class Gen1:
         start, names = self._offset(where), []
         for _ in range(count):
             end = self.rom.index(0x50, start)
-            names.append(decode(self.rom[start:end]))
+            names.append(self.decode(self.rom[start:end]))
             start = end + 1
         return names
 
@@ -377,20 +381,20 @@ class Gen1:
 
     # ---- state ----
 
-    @staticmethod
-    def screen_tiles(emu: Emulator) -> bytes:
-        return emu.read(TILEMAP, 20 * 18)
+    @classmethod
+    def screen_tiles(cls, emu: Emulator) -> bytes:
+        return emu.read(cls.TILEMAP, 20 * 18)
 
-    @staticmethod
-    def screen_text(tiles: bytes) -> list[str]:
-        return [decode(tiles[r * 20 : (r + 1) * 20]).replace("·", " ").rstrip() for r in range(18)]
+    @classmethod
+    def screen_text(cls, tiles: bytes) -> list[str]:
+        return [cls.decode(tiles[r * 20 : (r + 1) * 20]).replace("·", " ").rstrip() for r in range(18)]
 
-    @staticmethod
-    def screen_mode(tiles: bytes, in_battle: bool) -> dict:
+    @classmethod
+    def screen_mode(cls, tiles: bytes, in_battle: bool) -> dict:
         """What the screen shows: mode overworld|dialog|menu|battle, plus prompt flags."""
         cursor = CURSOR in tiles
         dialog = tiles[12 * 20] == BOX_TOP_LEFT and tiles[17 * 20 + 19] == BOX_BOTTOM_RIGHT
-        text = "\n".join(Gen1.screen_text(tiles))
+        text = "\n".join(cls.screen_text(tiles))
         yes_no = cursor and "YES" in text and "NO" in text
         mode = "battle" if in_battle else "menu" if cursor else "dialog" if dialog else "overworld"
         at = tiles.find(CURSOR)
@@ -399,7 +403,7 @@ class Gen1:
             "cursor": cursor,
             "cursor_at": [at % 20, at // 20] if cursor else None,
             "yes_no": yes_no,
-            "waiting": tiles[16 * 20 + 18] == WAIT_ARROW,
+            "waiting": tiles[cls.WAIT_ROW * 20 + 18] == WAIT_ARROW,
         }
 
     def state(self, emu: Emulator) -> dict:
@@ -418,7 +422,7 @@ class Gen1:
             party.append(
                 {
                     "species": self.species_name(mon[0]),
-                    "name": decode(nicks[i * 11 : i * 11 + 11]),
+                    "name": self.decode(nicks[i * 11 : i * 11 + 11]),
                     "level": mon[33],
                     "hp": int.from_bytes(mon[1:3]),
                     "max_hp": int.from_bytes(mon[34:36]),
@@ -449,7 +453,7 @@ class Gen1:
                 "enemy_max_hp": int.from_bytes(emu.read(self.ram.ENEMY_MAX_HP, 2)),
             }
         badges = emu.read(self.ram.BADGES, 1)[0]
-        player_name = decode(emu.read(self.ram.PLAYER_NAME, 11))
+        player_name = self.decode(emu.read(self.ram.PLAYER_NAME, 11))
         in_game = bool(m[10] and m[11]) and bool(player_name) and "·" not in player_name
         return {
             "map_id": map_id,
@@ -461,7 +465,7 @@ class Gen1:
             "screen": self.screen_mode(tiles, bool(battle_kind)),
             "screen_text": [line for line in self.screen_text(tiles) if line.strip()],
             "player_name": player_name,
-            "rival_name": decode(emu.read(self.ram.RIVAL_NAME, 11)),
+            "rival_name": self.decode(emu.read(self.ram.RIVAL_NAME, 11)),
             "party": party,
             "bag": bag,
             "money": bcd(emu.read(self.ram.MONEY, 3)),
@@ -570,17 +574,21 @@ class Gen1:
             + (f" ({', '.join(flags)})" if flags else "")
             + (f", cursor at column {screen['cursor_at'][0]} row {screen['cursor_at'][1]}" if screen["cursor"] else ""),
             f"Player {state['player_name']}, rival {state['rival_name']}. Money {state['money']}, badges "
-            f"{state['badges']}/8, Pokédex owned {state['dex_owned']} seen {state['dex_seen']}.",
+            f"{state['badges']}/{state.get('badge_max', 8)}{state.get('badge_note', '')}, Pokédex owned "
+            f"{state['dex_owned']} seen {state['dex_seen']}."
+            + (f" Time of day: {state['time_of_day']}." if "time_of_day" in state else ""),
         ]
         party = [
             f"{p['name']} ({p['species']}, {'/'.join(p['types'])}) L{p['level']} HP {p['hp']}/{p['max_hp']} "
-            f"{p['status']} [{', '.join(Gen1._move_text(*move) for move in zip(p['moves'], p['pp'], strict=True))}]"
+            f"{p['status']}{' holding ' + p['item'] if p.get('item') else ''} "
+            f"[{', '.join(Gen1._move_text(*move) for move in zip(p['moves'], p['pp'], strict=True))}]"
             for p in state["party"]
         ]
         lines.append("Party: " + ("; ".join(party) if party else "none"))
         if detail:
             lines += [
-                f"  {p['name']}: {stat_line(p['stats'])}; stat exp {stat_line(p['stat_exp'], hp=True)};"
+                f"  {p['name']}: {stat_line(p['stats'], names=p.get('stat_names', ('Atk', 'Def', 'Spd', 'Spc')))};"
+                f" stat exp {stat_line(p['stat_exp'], hp=True)};"
                 f" DVs {stat_line(p['dvs'], hp=True)}"
                 for p in state["party"]
             ]
@@ -607,7 +615,7 @@ class Gen1:
         before = self.screen_tiles(emu)
         emu.run([button], hold)
         emu.run([], wait)
-        for _ in range(wait, REACT_FRAMES, 4):
+        for _ in range(wait, self.REACT_FRAMES, 4):
             if self.screen_tiles(emu) != before:
                 return
             emu.run([], 4)
@@ -616,10 +624,18 @@ class Gen1:
         m = emu.read(self.ram.CUR_MAP, 5)
         return m[0], m[4], m[3]
 
+    def _moving(self, emu: Emulator) -> bool:
+        """Whether the walk animation is running."""
+        return bool(emu.read(self.ram.WALK_COUNTER, 1)[0])
+
+    def _blocks(self, emu: Emulator) -> bytes:
+        """The start of the map's block grid, which changes when a new map has loaded."""
+        return emu.read(OVERWORLD_MAP, 64)
+
     def _settle(self, emu: Emulator, limit: int = 60) -> None:
         """Run frames until the walk animation is over."""
         for _ in range(limit):
-            if not emu.read(self.ram.WALK_COUNTER, 1)[0]:
+            if not self._moving(emu):
                 return
             emu.run([], 1)
 
@@ -627,7 +643,7 @@ class Gen1:
         """After a warp the map id changes ~30 frames before the new map's data loads; wait until it has loaded
         and input is accepted again."""
         for _ in range(0, limit, 4):
-            if emu.read(OVERWORLD_MAP, 64) != old_blocks and not emu.read(JOY_IGNORE, 1)[0]:
+            if self._blocks(emu) != old_blocks and not emu.read(JOY_IGNORE, 1)[0]:
                 break
             emu.run([], 4)
         emu.run([], 8)
@@ -635,10 +651,10 @@ class Gen1:
     def step(self, emu: Emulator, direction: str) -> str:
         """Move one step. Returns moved | blocked | map_changed | battle | dialog."""
         start = self._position(emu)
-        blocks = emu.read(OVERWORLD_MAP, 64)
-        for _ in range(24):
+        blocks = self._blocks(emu)
+        for _ in range(self.STEP_FRAMES):
             emu.run([direction], 1)
-            if self._position(emu) != start or emu.read(self.ram.WALK_COUNTER, 1)[0]:
+            if self._position(emu) != start or self._moving(emu):
                 break
         self._settle(emu)
         emu.run([], 2)
