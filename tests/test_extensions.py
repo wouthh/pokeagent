@@ -33,6 +33,9 @@ class FakeGame:
         self.adapter, self.emu, self.x, self.money, self.frames = FakeAdapter(), self, 0, 100, 0
         self.presses = 0
 
+    def check_ram(self, address, length):
+        pass
+
     def read(self, address, length):
         if address < 0x8000:
             raise RequestRefused(f"address {address:#06x} is not readable RAM")

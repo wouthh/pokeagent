@@ -5,11 +5,16 @@ language. It keeps what it learns, and it builds and validates its own tools whe
 
 - **Agent:** the local [Claude Code](https://code.claude.com) CLI (`claude -p`), running on your own login.
 - **Emulation:** unchanged upstream [libretro](https://www.libretro.com) cores, loaded in-process through
-  [libretro.py](https://github.com/JesseTG/libretro.py). SameBoy is used for Game Boy and Game Boy Color; GBA (mGBA)
-  and DS (melonDS DS) come later.
+  [libretro.py](https://github.com/JesseTG/libretro.py). SameBoy is used for Game Boy and Game Boy Color, mGBA for
+  Game Boy Advance; DS (melonDS DS) comes later.
 - **Supported games:** Pokémon Red, Blue and Yellow (English), and hacks built on their engine such as Blue Kaizo
   (found by scanning the ROM; Brown is expected to work but is untested). Japanese Red/Green/Blue need their own
   ROMs and a kana charmap and are not supported yet.
+- **Supported GBA games:** Pokémon Ruby, Sapphire, Emerald, FireRed and LeafGreen (English), identified from the
+  ROM by their tables, not by a hash. The dumps checked are Ruby rev 1 (sha1 `610b96a9…`), Sapphire (`79bbb886…`, a
+  dump that matches no pret build, which works the same way), Emerald (`f3ae0881…`), FireRed 1.1 (`dd5945db…`) and
+  LeafGreen 1.1 (`7862c67b…`). mGBA boots them with its built-in BIOS, so no BIOS file is needed. ROM hacks that
+  move the games' RAM or rename their tables (ROWE, Radical Red) are refused or stop with a clear message.
 - **First use case:** Pokémon Red/Blue. The first long-term benchmark is finishing a whole
   playthrough without help.
 

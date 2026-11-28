@@ -18,6 +18,8 @@ first use case, not an architectural constraint. Design and decisions: [docs/arc
   - `games/__init__.py`: `identify(rom)` and the adapter contract every game follows; `games/pokemon_gen1.py`: the
     Gen 1 adapter for Red, Blue, Yellow and engine hacks (state, screen modes, walk grid, macro actions, scoring);
     `games/gen1_tables.py` scans a ROM for its name and collision tables; the map-name files hold only constants.
+  - `games/pokemon_gen3.py`: the Ruby, Sapphire, Emerald, FireRed and LeafGreen adapter (mGBA core); `games/gen3_tables.py`
+    is its text encoding and ROM name-table scanner.
   - `server.py`: the `game` MCP server (token and Host checks, tools, budgets). `play.py`: runs, the live `Game`,
     the session loop, play styles and run variety, `runs`, `view` and `export-sav`. `viewer.py`: the game window, the `--web` page, the `web` run browser and the keyboard map for `view --keyboard`. `prompts/play.md`: the play-mode system prompt.
   - `stats.py`: `status`, `stats [--compare]` and the viewer panel, all from events.
@@ -78,6 +80,7 @@ first use case, not an architectural constraint. Design and decisions: [docs/arc
 Focused check:   uv run pytest -q tests/<file>.py
 Full local gate: scripts/check.sh
 ROM checks:      POKEAGENT_ROM=/path/to/your/dump.gb uv run pytest -q tests/test_gen1.py
+GBA ROM checks:  dumps named like "Pokemon Emerald.gba" in the main checkout's roms/ (tests/test_gen3.py)
 ```
 
 The gate needs uv (Python 3.13 is fetched by uv), `bwrap` with unprivileged user namespaces, and `7z`. It runs ruff

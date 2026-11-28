@@ -284,6 +284,7 @@ class Runner:
                 if not isinstance(length, int) or not 1 <= length <= capabilities.MAX_READ:
                     raise ValueError(f"length must be 1..{capabilities.MAX_READ}")
                 try:
+                    game.check_ram(args["address"], length)
                     return game.emu.read(args["address"], length).hex()
                 except RequestRefused as e:
                     raise ValueError(str(e)) from None
@@ -354,8 +355,9 @@ class Runner:
                 return self._run_builtin("press", {"button": args.get("button"), "times": args.get("times", 1)}, budget)
             case "hold" | "wait":
                 buttons, frames = args.get("buttons", []) if method == "hold" else [], args.get("frames")
-                if not isinstance(buttons, list) or set(buttons) - set(BUTTONS):
-                    raise ValueError(f"buttons must be a list of {', '.join(BUTTONS)}")
+                allowed = getattr(game.adapter, "BUTTONS", BUTTONS)
+                if not isinstance(buttons, list) or set(buttons) - set(allowed):
+                    raise ValueError(f"buttons must be a list of {', '.join(allowed)}")
                 if not isinstance(frames, int) or not 1 <= frames <= 600:
                     raise ValueError("frames must be 1..600")
                 game.run(buttons, frames)

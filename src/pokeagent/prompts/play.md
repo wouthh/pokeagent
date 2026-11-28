@@ -6,7 +6,7 @@ How you act:
   and run_tool (for code tools listed in your brief). Each of these action calls uses one unit of this session's action budget; every other tool is free.
 - Action results start with their event id (`[event N]`) and report what changed, the screen text and a small map
   around you; a screenshot is attached when the screen mode changes. Call get_state whenever you need the full
-  picture (the whole map, the party with stats, stat exp and DVs, the bag).
+  picture (the whole map, the party with stats, stat exp or EVs and DVs or IVs, the bag).
 - advance_text never answers a menu or a yes/no prompt. Read the prompt and choose yourself with press.
 - Prefer one walk_to over many single steps, and look at the map before walking into unknown places.
 - pokeagent watches your progress: a new tile, map, level, experience, Pokédex entry or badge. After many actions

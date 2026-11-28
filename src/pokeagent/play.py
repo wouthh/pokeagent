@@ -43,7 +43,7 @@ MAX_FAILURES = 5
 MAX_RESTARTS = 3  # emulator restarts per play
 KNOWLEDGE_HITS = 5
 IDENTITY = ("rom_sha1", "core", "core_options")  # what a checkpoint must share with its run to be restored
-LEGEND = "@ you, S person or object, W warp/door, . walkable, , grass, v < > ^ ledges, # blocked"
+LEGEND = "@ you, S person or object, W warp/door, . walkable, , grass, ~ water (needs Surf), v < > ^ ledges, # blocked"
 STYLES = ("natural", "direct")
 NICKNAME_THEMES = (
     "gemstones", "spices and herbs", "rivers", "stars and constellations", "heroes of old legends", "cheeses",
@@ -206,10 +206,18 @@ class Game:
         """Builtin and the run's own observations, for macro conditions (call under the lock)."""
         return self.adapter.observations(self.adapter.state(self)) | self._custom()
 
+    def check_ram(self, address: int, length: int) -> None:
+        """Refuse a read outside the adapter's RAM (`RAM_RANGES`, when it names any: the GBA's EWRAM and IWRAM, so
+        never ROM, BIOS, video memory or I/O). The worker itself refuses ROM and unmapped addresses."""
+        ranges = getattr(self.adapter, "RAM_RANGES", None)
+        if ranges and not any(start <= address and address + length <= start + size for start, size in ranges):
+            raise ValueError(f"{address:#010x} (+{length}) is not in this game's RAM")
+
     def peek(self, address: int, length: int) -> bytes:
         """Read RAM (RAM regions only; ROM and unmapped addresses are refused)."""
+        self.check_ram(address, length)
         with self.lock:
-            return self.emu.read(address, length)
+            return b"".join(self.emu.read(address + i, min(0x10000, length - i)) for i in range(0, length, 0x10000))
 
     def try_observation(self, spec: dict):
         """Read and decode a new observation now, before it is defined."""
@@ -291,8 +299,9 @@ class Game:
         match name:
             case "press":
                 button, times = args.get("button"), args.get("times", 1)
-                if not isinstance(button, str) or button not in BUTTONS:
-                    raise ValueError(f"button must be one of {', '.join(BUTTONS)}")
+                buttons = getattr(adapter, "BUTTONS", BUTTONS)
+                if not isinstance(button, str) or button not in buttons:
+                    raise ValueError(f"button must be one of {', '.join(buttons)}")
                 if not isinstance(times, int) or not 1 <= times <= 10:
                     raise ValueError("times must be 1..10")
                 for _ in range(times):
@@ -431,7 +440,7 @@ def style_text(meta: dict, party: list[dict], glitches: str) -> list[str]:
                 + (f"; no nickname yet: {', '.join(plain)}" if plain else "")
                 + "."
             )
-    if meta["glitches"]:
+    if meta["glitches"] and glitches:
         lines.append(glitches)
     return lines
 
@@ -1027,7 +1036,7 @@ def _states(run_dir: Path, memory: Memory, checkpoint: str | None) -> list[tuple
     return found
 
 
-def _viewer(watch: bool, web: tuple[str, int] | None):
+def _viewer(watch: bool, web: tuple[str, int] | None, core: str = "sameboy"):
     """(what the game and runner show things on, the web server or None): the Tk window when `watch`, the web page at
     `web` (host, port); both show the same object. (None, None) for neither."""
     if not (watch or web):
@@ -1036,7 +1045,7 @@ def _viewer(watch: bool, web: tuple[str, int] | None):
 
     from pokeagent import viewer
 
-    shown = viewer.Viewer() if watch else SimpleNamespace(frame=None, status="", panel="")
+    shown = viewer.Viewer(viewer.SCREENS[core]) if watch else SimpleNamespace(frame=None, status="", panel="")
     return shown, viewer.serve(shown, web) if web else None
 
 
@@ -1056,7 +1065,7 @@ def view(
             emu.load_state(found[0][1])
         emu.run([], 1)  # draw the loaded state
         frame = emu.frame()
-    viewer, page = _viewer(watch, web)
+    viewer, page = _viewer(watch, web, meta["core"])
     viewer.frame, viewer.panel = frame, panel
     quit = "close the window or press Ctrl-C" if watch else "press Ctrl-C in the terminal"
     viewer.status = f"{run_dir.name}: {found[0][0] if found else 'power-on'} (viewing only; {quit} to quit)"
@@ -1088,7 +1097,7 @@ def play_by_hand(
     meta, rom, adapter = _run_rom(run_dir)
     with contextlib.closing(open_memory(run_dir, data_dir)) as memory:
         label, state = (_states(run_dir, memory, checkpoint) or [("power-on", None)])[0]
-    viewer, page = _viewer(True, web)
+    viewer, page = _viewer(True, web, meta["core"])
     keep = f"save in game to keep it in {out.name}" if out else "nothing is kept; --out keeps your in-game save"
     viewer.status = f"{run_dir.name}: {label}, a copy ({keep}). Close the window to stop."
     viewer.panel = KEY_HELP
@@ -1215,7 +1224,7 @@ def play(
             settle = f"; settle it with `pokeagent objective confirm|reject {run_dir.name}`"
             raise ValueError(f"run {run_dir.name} is {status} ({why})" + (settle if status == "claimed" else ""))
         version = preflight()
-        viewer, page = _viewer(watch, web)
+        viewer, page = _viewer(watch, web, meta["core"])
         start = partial(Emulator, core_path(meta["core"]), rom, options=meta["core_options"])
         game = Game(
             start(), adapter, speed, viewer, start, Registry(memory), data_dir / "library", run_dir / "tkv.json"

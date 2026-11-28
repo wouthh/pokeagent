@@ -21,7 +21,9 @@ from urllib.parse import urlsplit
 
 from PIL import Image
 
-# Keyboard keys (Tk keysyms, lower case) to Game Boy buttons, as in common emulators.
+SCREENS = {"sameboy": (160, 144), "mgba": (240, 160)}  # picture size by libretro core, for the window's layout
+
+# Keyboard keys (Tk keysyms, lower case) to Game Boy buttons, as in common emulators (A and S are the GBA's L and R).
 KEYS = {
     "up": "up",
     "down": "down",
@@ -31,8 +33,10 @@ KEYS = {
     "z": "b",
     "return": "start",
     "backspace": "select",
+    "a": "l",
+    "s": "r",
 }
-KEY_HELP = "Arrow keys move; X is A, Z is B, Enter is START, Backspace is SELECT."
+KEY_HELP = "Arrow keys move; X is A, Z is B, Enter is START, Backspace is SELECT; A is L, S is R (Game Boy Advance)."
 
 
 def held(keys: frozenset[str], keysym: str, down: bool) -> frozenset[str]:
@@ -44,7 +48,8 @@ def held(keys: frozenset[str], keysym: str, down: bool) -> frozenset[str]:
 
 
 class Viewer:
-    def __init__(self):
+    def __init__(self, size: tuple[int, int] = (160, 144)):
+        self.size = size  # the picture's width and height, for the window's first layout
         self.frame: Image.Image | None = None
         self.status = ""
         self.panel = ""
@@ -76,15 +81,16 @@ class Viewer:
             root.bind(event, lambda e, down=down: setattr(self, "buttons", held(self.buttons, e.keysym, down)))
         root.bind("<FocusOut>", lambda e: setattr(self, "buttons", frozenset()))  # no key stays held behind its back
         # The picture fills the window, scaled to the largest size that keeps the aspect (nearest neighbour).
-        height = max(3 * 144, root.winfo_screenheight() * 2 // 3)
-        box = tkinter.Frame(root, bg="black", width=height * 160 // 144, height=height)
+        pw, ph = self.size
+        height = max(3 * ph, root.winfo_screenheight() * 2 // 3)
+        box = tkinter.Frame(root, bg="black", width=height * pw // ph, height=height)
         box.pack(fill="both", expand=True)
         box.pack_propagate(False)
         picture = tkinter.Label(box, bg="black", bd=0)
         picture.place(relx=0.5, rely=0.5, anchor="center")
-        status = tkinter.Label(root, anchor="w", justify="left", font="TkFixedFont", wraplength=height * 160 // 144)
+        status = tkinter.Label(root, anchor="w", justify="left", font="TkFixedFont", wraplength=height * pw // ph)
         status.pack(fill="x")
-        panel = tkinter.Label(root, anchor="nw", justify="left", font="TkFixedFont", wraplength=height * 160 // 144)
+        panel = tkinter.Label(root, anchor="nw", justify="left", font="TkFixedFont", wraplength=height * pw // ph)
         panel.pack(fill="x")
         shown: list = [None, None, None, None]
 
@@ -123,7 +129,7 @@ PAGE = """<!doctype html>
   body { margin: 0; padding: 16px; background: #111; color: #ddd; font: 14px/1.4 ui-monospace, monospace; }
   main { margin: 0 auto; }
   img { width: 100%; max-height: 75vh; object-fit: contain; image-rendering: pixelated; background: #000;
-        aspect-ratio: 160 / 144; display: block; }
+        display: block; }
   pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 12px 0 0; }
   #status { color: #fff; }
 </style>
@@ -215,7 +221,7 @@ _STYLE = """<style>
   a { color: #8cf; }
   pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   img { width: 100%; max-height: 75vh; object-fit: contain; image-rendering: pixelated; background: #000;
-        aspect-ratio: 160 / 144; display: block; }
+        display: block; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 12px; }
   figure { margin: 0; } figcaption { overflow-wrap: anywhere; }
   td { padding: 2px 12px 2px 0; vertical-align: top; }

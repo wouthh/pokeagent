@@ -142,3 +142,17 @@ def test_the_policy_allows_the_first_cycle_then_limits_attempts_and_token_share(
     assert denies(memory, step, 0.9, 1) == "step already had 1 development session(s), the limit per tool"
     assert denies(memory, other, 0.3, 2) == "development has used 71% of this run's tokens; the limit is 30%"
     assert denies(memory, step, 0.9, 2) is None
+
+
+def test_the_memory_tools_use_the_adapters_work_ram(tmp_path):
+    from types import SimpleNamespace
+
+    reads = []
+    game = SimpleNamespace(
+        adapter=SimpleNamespace(WORK_RAM=(0x02000000, 8)), peek=lambda a, n: reads.append((a, n)) or bytes(n)
+    )
+    bench = develop.Bench.__new__(develop.Bench)
+    bench.game, bench.snapshots = game, {}
+    assert "0x2000000-0x2000007" in bench.snapshot("aa")
+    assert reads == [(0x02000000, 8)] and "0 byte(s) differ" in bench.diff("aa")
+    assert develop.Bench._wram(SimpleNamespace(game=SimpleNamespace())) == develop.WRAM  # Game Boy: C000-DFFF
