@@ -237,8 +237,9 @@ action and the status panel; on by default), `--web [HOST:]PORT` (the same on a 
   only when the screen mode changed), `notes_read`/`notes_write` (8 KB), `end_session(summary, next_focus)` and
   `report_harness_issue`, plus the knowledge, objective and capability tools described below.
 - **`play.py`:** `Game` serialises every emulator call under one lock and is what the adapter drives, so it can
-  pace emulation and feed the viewer. `Runner` runs one session at a time with a brief (objective, check, budget,
-  last summary and focus, notes, current state):
+  pace emulation and feed the viewer. `Runner` runs one session at a time with a brief (game title, objective,
+  check, budget, last summary and focus, the current state read from RAM, notes). When the party or the bag changed,
+  an action's result names the items gained or lost and the Pokémon that joined or left:
   - `limit`: waits until the reported reset (at least a minute, 15 minutes without a reset time);
   - `auth_error`: stops the run; `InitRejected` stops it before any model request;
   - `error`: backs off 30 s, 60 s, …; five in a row stop the run;
@@ -266,7 +267,8 @@ action and the status panel; on by default), `--web [HOST:]PORT` (the same on a 
 ## Milestones and the stuck ladder *(implemented, phase 7b)*
 
 - **Milestones** are `milestone` events, so they belong to the timeline they happened on: the first visit to a map
-  (on the current timeline's history), a new badge and a new Pokédex entry, read from the game state after every
+  (on the current timeline's history), a new badge, a new Pokédex entry and an item obtained for the first time on
+  the timeline (items in the loaded game's bag count as already had), read from the game state after every
   completed action. A new badge also takes a checkpoint. The brief lists the last five, and a restore lists the
   ones it undid.
 - **Progress** is `progress_score` rising above its best: badges, maps visited on this timeline, Pokédex entries,
@@ -385,14 +387,16 @@ action and the status panel; on by default), `--web [HOST:]PORT` (the same on a 
   in the next brief; `approve-check` makes the latest proposal a user check.
 - **Knowledge tools:** `knowledge_add`, `knowledge_search`, `knowledge_set_status`. Scope is `run`, `rom` (sha1),
   `family` or `general`; a search sees its own run, its ROM, its family and general entries, without refuted or
-  superseded ones. Entries are hypotheses; one is confirmed only with evidence, an `action` event of this run's
+  superseded ones; an entry recorded while playing another ROM says which game (or "another game" for one no
+  adapter lists by sha1, such as a hack). Entries are hypotheses; one is confirmed only with evidence, an `action` event of this run's
   current timeline (every action result starts with `[event N]`). An entry with a url (from the web) starts as a
   hypothesis whatever the evidence. `progress` entries are always run-scoped.
-- **Brief:** objective; each check with its source and whether it holds now; the latest proposal; the observations
+- **Brief:** the game's title; objective; each check with its source and whether it holds now; the latest proposal; the observations
   with their values; a rejected claim; the last summary (or one generated from the session's last actions when it
-  ended without `end_session`); notes; the top 5 knowledge entries matching the current map and the planned focus;
+  ended without `end_session`); the current game state read from RAM, which the brief says outranks the notes, plan
+  and knowledge; notes; the top 5 knowledge entries matching the current map and the planned focus;
   where recent play went (the last five play sessions' actions, milestones and cost, and the last one's most repeated
-  actions and three-action sequences, as numbers without advice); a restore since the last session; the current state.
+  actions and three-action sequences, as numbers without advice); a restore since the last session.
 - **Restore:** `pokeagent restore RUN` lists the checkpoints of the current timeline's history (its own, and its
   ancestors' up to where it branched); `pokeagent restore RUN CHECKPOINT` takes a stopped run back to one:
   - refused when the checkpoint was saved with another ROM, core or core options than the run's;
@@ -849,3 +853,8 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
   tile like any floor and the next press in the hop direction jumps two squares; entering from the far side is blocked
   by the wall behind it, which is what makes ledges one-way. An earlier reading of the source (jump when stepping onto
   the tile, landing past it) was wrong and was replaced.
+- **2026-11-28: The game, not the agent's notes, says what the agent has.** A Gold session believed it was playing
+  Crystal and planned around items and Pokémon its notes assumed. The brief now names the game, puts the state read
+  from RAM before the notes and says it outranks them; first-time items are milestones and action results name what
+  entered or left the bag and party; knowledge learned in another game says so. All of it is generic runner code over
+  the adapters' shared state, so a new game gets it without game-specific rules.
