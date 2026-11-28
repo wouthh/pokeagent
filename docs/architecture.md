@@ -68,10 +68,33 @@ Thin interfaces exist only at these seams, each with one implementation for now:
 ## Game adapters
 
 `games/identify(rom)` asks each adapter in `ADAPTERS` whether it recognises the ROM and builds the first that does;
-any other ROM is refused with the list of supported games. The contract every adapter follows is in the docstring of
+`generic.Generic` is last, so any GB, GBC or GBA cartridge with a valid header that no game adapter recognises gets it
+(see its section); any other file is refused. The contract every adapter follows is in the docstring of
 `games/__init__.py`: its core and options, default objective and trusted check, observations for success checks, the
 natural style's starters, team types, side quests and glitch text, the shared state shape, and the controller-only
 macros. `run.json` records the adapter's family, core and core options, so restores and `--from` check them.
+
+## Game adapter: generic *(any GB, GBC or GBA cartridge)*
+
+`games/generic.py` follows the contract with no game knowledge, so an unknown ROM can still be explored.
+
+- **Recognition** is the cartridge header only: the Nintendo logo and header checksum (GB, GBC; the CGB flag at 0x143
+  makes it GBC) or the fixed 0x96 and complement byte (GBA). Title and game code come from the header. No hash lists.
+- **Cores** are exactly the Gen 1 (Game Boy), Gen 2 (Game Boy Color) and Gen 3 (mGBA, with L and R, EWRAM and IWRAM
+  as readable RAM) choices. The family is `generic-gb`, `generic-gbc` or `generic-gba`, so rom-scoped knowledge is
+  kept per game and the family scope is shared by the games of one platform.
+- **State** is `{"in_game": False, "frame_id": ...}`: a hash of the frame as 20x16 gray cells of four levels, so
+  animation and a blinking cursor do not change it and another screen does (tested). `in_game` stays False because
+  nothing tells a game is in progress, which keeps the check, the party and the map out of every Pokémon-shaped path:
+  the runner treats a `frame_id` state as "screens only" (no milestones, no map, no grid, no walk guard text) and an
+  action result always carries a screenshot, since there is no screen text. The fingerprint is the `screen` effect.
+- **Controller:** `press` is Gen 3's settle-waiting press. `walk`, `walk_to` and `advance_text` refuse with one
+  sentence; macros and develop-mode tools still work through `press`. Text decoding of observations refuses (no
+  charmap is known); `bytes`, integers and bits work.
+- **Progress** for the stuck ladder is novelty: screens not seen before on the timeline.
+- **Runs:** the default objective is to play and get as far as the agent can, with no default check, so the run goes on
+  until a limit, an agent claim or the user's own check. The style is always direct, with no glitch text. `--sav` and
+  `export-sav` need the game's save format and refuse.
 
 ## Game adapter: Pokémon Gen 1 *(implemented, phase 3; Yellow and hacks added later)*
 
@@ -865,3 +888,13 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
   from RAM before the notes and says it outranks them; first-time items are milestones and action results name what
   entered or left the bag and party; knowledge learned in another game says so. All of it is generic runner code over
   the adapters' shared state, so a new game gets it without game-specific rules.
+- **2026-11-28: A generic adapter plays any GB, GBC or GBA cartridge.** Wout wants the agent to get as few constants as
+  possible from us and to explore ROMs it has never seen, Pokémon hacks and other games alike. Instead of refusing what
+  Gen 1, 2 and 3 do not recognise, `Generic` (last in `ADAPTERS`) takes any cartridge with a valid header and holds no
+  game knowledge; the agent learns from screenshots and the read-only RAM tools and records what it finds as rom-scoped
+  knowledge. Its state is only a coarse frame hash and the runner handles that shape in a few guards instead of a
+  second runner; progress is novelty (screens not seen before on the timeline). The coarseness (20x16 cells, four
+  gray levels) is a deliberate choice that lets small animation pass and leaves a boundary case: a change that moves a
+  cell across a level boundary counts as a new screen. A success check can use none of the builtin observations (they
+  are Pokémon's), so only the user's judgement or an agent claim ends a generic run. Issues 44 and 45 (Radical Red,
+  ROWE) are played this way.

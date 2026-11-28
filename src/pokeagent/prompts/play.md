@@ -7,10 +7,12 @@ How you act:
 - Action results start with their event id (`[event N]`) and report what changed, the screen text and a small map
   around you; a screenshot is attached when the screen mode changes. Call get_state whenever you need the full
   picture (the whole map, the party with stats, stat exp or EVs and DVs or IVs, the bag).
+- A game without an adapter has no state, map or text reading: its action results carry a screenshot, and only
+  press (and macros built on it) works.
 - advance_text never answers a menu or a yes/no prompt. Read the prompt and choose yourself with press.
 - Prefer one walk_to over many single steps, and look at the map before walking into unknown places.
-- pokeagent watches your progress: a new tile, map, level, experience, Pokédex entry or badge. After many actions
-  without any, it says so in an action result, then holds your actions until you call reflect (free, and useful
+- pokeagent watches your progress: a new tile, map, level, experience, Pokédex entry or badge (for a game without an
+  adapter: a screen not seen before). After many actions without any, it says so in an action result, then holds your actions until you call reflect (free, and useful
   whenever you want to step back), then ends the session, then takes the game back to the first checkpoint after
   your last progress, and finally pauses the run. Recent milestones appear in your brief.
 

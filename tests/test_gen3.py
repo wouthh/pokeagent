@@ -290,9 +290,7 @@ def test_the_starters_differ_by_family(gba):
 
 def test_hacks_with_moved_names_are_not_gen_3_games(find_rom):
     for name in ("03 Pokemon_ROWE.gba", "04 Pokemon Radical Red 3.0.2.gba"):
-        assert not Gen3.recognises(find_rom(name).read_bytes())
-        with pytest.raises(ValueError, match="unsupported ROM"):
-            identify(find_rom(name).read_bytes())
+        assert not Gen3.recognises(find_rom(name).read_bytes())  # the generic adapter takes them (test_generic.py)
 
 
 @pytest.fixture(scope="module", params=ROM_NAMES)

@@ -14,7 +14,12 @@ language. It keeps what it learns, and it builds and validates its own tools whe
   ROM by their tables, not by a hash. The dumps checked are Ruby rev 1 (sha1 `610b96a9…`), Sapphire (`79bbb886…`, a
   dump that matches no pret build, which works the same way), Emerald (`f3ae0881…`), FireRed 1.1 (`dd5945db…`) and
   LeafGreen 1.1 (`7862c67b…`). mGBA boots them with its built-in BIOS, so no BIOS file is needed. ROM hacks that
-  move the games' RAM or rename their tables (ROWE, Radical Red) are refused or stop with a clear message.
+  move the games' RAM or rename their tables (ROWE, Radical Red) are played through the generic adapter below.
+- **Any other GB, GBC or GBA game:** a cartridge with a valid header that no game adapter recognises (a Pokémon hack,
+  or a game that is not Pokémon) gets the generic adapter. It holds no game knowledge: the agent sees screenshots
+  and reads RAM through the read-only tools, `walk`, `walk_to` and `advance_text` are unavailable (use `press`), and
+  progress is a screen not seen before. The default objective is to play and get as far as it can; there is no
+  default success check, and `--sav` and `export-sav` need a game adapter. Other files are refused.
 - **Gen 2:** Pokémon Gold (sha1 `d8b8a3600a465308c9953dfa04f0081c05bdcb94`), Silver
   (`49b163f7e57702bc939d642a18f591de55d92dae`) and Crystal 1.1 (`f2f52230b536214ef7c9924f483392993e226cfb`), English,
   verified live. Other builds on their engine (Crystal 1.0 and the Australian release, hacks such as Crystal Clear) are

@@ -34,11 +34,11 @@ def test_decode_and_bcd():
     assert bcd(b"\x04\x48\x4a") == 0  # power-on noise is not BCD
 
 
-def test_identify_picks_the_adapter_or_lists_the_supported_games(rom_path):
+def test_identify_picks_the_adapter_or_refuses_a_non_cartridge(rom_path):
     from pokeagent.games import identify
 
     assert isinstance(identify(rom_path.read_bytes()), Gen1)
-    with pytest.raises(ValueError, match=r"unsupported ROM .*supported: Pokémon Red"):
+    with pytest.raises(ValueError, match="not a GB, GBC or GBA cartridge"):
         identify(b"not a game")
 
 
