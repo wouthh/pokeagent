@@ -1,31 +1,38 @@
-"""Game adapter for the English Pokémon Red and Blue (Game Boy).
+"""Game adapter for the English Pokémon Red, Blue and Yellow (Game Boy), and hacks built on their engine.
 
-Addresses come from the pret/pokered disassembly; every address used here is identical in the English Red and Blue
-builds. Pokémon, item and move names are read from the user's ROM at runtime, so no game text is stored in this
-repository. All game progress goes through controller input; RAM is only read.
+RAM addresses come from the pret/pokered and pret/pokeyellow disassemblies: Red and Blue share one layout, Yellow's is
+the same minus one byte from `WALK_COUNTER` on. Pokémon, item and move names and the collision tables are found in the
+user's ROM at runtime (`gen1_tables`), so no game text is stored in this repository and a hack that keeps the engine
+works without an entry here. All game progress goes through controller input; RAM is only read.
 """
 
 import hashlib
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 
 from pokeagent.emulator.client import Emulator
+from pokeagent.games.gen1_tables import find_tables
 
 ROMS = {
     "ea9bcae617fdf159b045185467ae58b2e4a48b9a": "Pokémon Red (English)",
     "d7037c83e1ae5b39bde3c30787637ba1d4c48ce2": "Pokémon Blue (English)",
+    "cc7d03262ebfaf2f06772c1a480c7d9d5f4a38e1": "Pokémon Yellow (English)",
 }
 FAMILY = "pokemon-gen1"
 CORE = "sameboy"
 CORE_OPTIONS = {"sameboy_model": "Game Boy"}
+YELLOW_CORE_OPTIONS = {"sameboy_model": "Game Boy Color"}  # Yellow is a colour-enhanced cartridge
 HALL_OF_FAME = 0x76
 DEFAULT_OBJECTIVE = "Finish the game: defeat the Elite Four and the Champion and enter the Hall of Fame."
 DEFAULT_CHECK = {"obs": "map_id", "op": "==", "value": HALL_OF_FAME}
 MAP_NAMES = Path(__file__).with_name("gen1_map_names.txt").read_text().splitlines()
+YELLOW_MAP_NAMES = Path(__file__).with_name("gen1_yellow_map_names.txt").read_text().splitlines()
 # Per-run variety for the natural play style: the starters (species index: type ids), the type ids a team can
 # draw (all but BIRD and the unused ids) and optional side quests.
 STARTERS = {0x99: (0x16, 0x03), 0xB0: (0x14,), 0xB1: (0x15,)}
+YELLOW_STARTERS = {0x54: (0x17,)}  # PIKACHU is the only starter (ELECTRIC)
 TEAM_TYPES = (0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x07, 0x08, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A)
 SIDE_QUESTS = (
     "Buy the Magikarp the salesman offers in the Mt. Moon Pokémon Center and raise it into a Gyarados.",
@@ -52,6 +59,13 @@ GLITCHES = (
     " Cinnabar Island) and arbitrary code execution with the glitch item 8F. Research the exact steps before you try"
     " one: some corrupt the save, the Hall of Fame or the game, so use them on purpose and record what worked."
 )
+# Yellow: the same quests, minus the Safari Zone (its wild Pokémon differ) and the Pikachu that follows you anyway.
+YELLOW_SIDE_QUESTS = tuple(q for q in SIDE_QUESTS if "Safari" not in q and q != "Catch a Pikachu.")
+YELLOW_GLITCHES = (
+    "Glitches: allowed in this run. Known glitches of this game done with ordinary controller input are fair play."
+    " Research the exact steps before you try one: some corrupt the save, the Hall of Fame or the game, so use them"
+    " on purpose and record what worked."
+)
 OBSERVATIONS = {  # the values success checks may test, read from the adapter's state
     "map_id": lambda s: s["map_id"],
     "x": lambda s: s["x"],
@@ -65,7 +79,7 @@ OBSERVATIONS = {  # the values success checks may test, read from the adapter's 
     "in_game": lambda s: s["in_game"],
 }
 
-# WRAM / HRAM (pret pokered symbols)
+# WRAM / HRAM (pret pokered symbols; the values are Red/Blue's, `RAM_LAYOUTS` has Yellow's)
 TILEMAP = 0xC3A0  # 20x18 screen tile ids
 SPRITES1, SPRITES2 = 0xC100, 0xC200  # 16 sprites x 16 bytes each; sprite 0 is the player
 OVERWORLD_MAP = 0xC6E8  # current map's blocks with a 3-block border
@@ -81,10 +95,39 @@ MONEY, BADGES = 0xD347, 0xD356
 CUR_MAP = 0xD35E  # map, view pointer (2), y, x, ..., tileset (+9), height (+10), width (+11)
 NUM_WARPS, WARPS = 0xD3AE, 0xD3AF
 TILESET_BANK, TILESET_BLOCKS, TILESET_COLLISION, GRASS_TILE = 0xD52B, 0xD52C, 0xD530, 0xD535
-# ROM tables (bank, address)
-MONSTER_NAMES, ITEM_NAMES, MOVE_NAMES = (0x07, 0x421E), (0x01, 0x472B), (0x2C, 0x4000)
-TILE_PAIR_COLLISIONS_LAND, LEDGE_TILES = (0x00, 0x0C7E), (0x06, 0x66CF)
-TYPE_NAMES = (0x09, 0x7DAE)  # 0x1B little-endian pointers to names; 9-0x13 are unused (NORMAL)
+# Yellow has one byte less WRAM before WALK_COUNTER, so every constant from there on sits one lower.
+SHIFTED = [
+    "WALK_COUNTER",
+    "ENEMY_SPECIES",
+    "ENEMY_HP",
+    "ENEMY_LEVEL",
+    "ENEMY_MAX_HP",
+    "IS_IN_BATTLE",
+    "PLAYER_NAME",
+    "RIVAL_NAME",
+    "PARTY_COUNT",
+    "PARTY_SPECIES",
+    "PARTY_MONS",
+    "PARTY_NICKS",
+    "DEX_OWNED",
+    "DEX_SEEN",
+    "NUM_BAG_ITEMS",
+    "BAG_ITEMS",
+    "MONEY",
+    "BADGES",
+    "CUR_MAP",
+    "NUM_WARPS",
+    "WARPS",
+    "TILESET_BANK",
+    "TILESET_BLOCKS",
+    "TILESET_COLLISION",
+    "GRASS_TILE",
+]
+RAM_LAYOUTS = {
+    "red-blue": {name: globals()[name] for name in SHIFTED},
+    "yellow": {name: globals()[name] - 1 for name in SHIFTED},
+}
+PIKACHU_SLOT = 15  # Yellow: the follower's sprite slot (wSpritePikachuStateData1); it never blocks the player
 
 CHARMAP = {0x50: "", 0x7F: " ", 0xBA: "é", 0xBB: "'d", 0xBC: "'l", 0xBD: "'s", 0xBE: "'t", 0xBF: "'v", 0xE0: "'"}
 CHARMAP |= {0xE1: "PK", 0xE2: "MN", 0xE3: "-", 0xE4: "'r", 0xE5: "'m", 0xE6: "?", 0xE7: "!", 0xE8: ".", 0xEC: "▷"}
@@ -210,8 +253,34 @@ class Grid:
         return f"    x from {xs.start}\n" + "\n".join(rows)
 
 
+def layout_problems(read, layout: dict[str, int], banks: int = 64) -> list[str]:
+    """The RAM invariants a loaded game breaks under `layout` (none: it fits). Needs a game in progress: power-on RAM
+    is noise and fails every layout. `read(addr, n) -> bytes`."""
+    bad = []
+    name = read(layout["PLAYER_NAME"], 11)
+    end = name.find(0x50)
+    if not (1 <= end <= 10 and all(0x7F <= b <= 0xF5 for b in name[:end])):
+        bad.append("player name")
+    count, species = read(layout["PARTY_COUNT"], 1)[0], read(layout["PARTY_SPECIES"], 7)
+    if count > 6 or species[count] != 0xFF or not all(1 <= b <= 190 for b in species[:count]):
+        bad.append("party list")
+    items = read(layout["NUM_BAG_ITEMS"], 1)[0]
+    if items > 20 or read(layout["BAG_ITEMS"] + 2 * items, 1)[0] != 0xFF:
+        bad.append("bag list")
+    m = read(layout["CUR_MAP"], 12)
+    if not (m[0] < 0xF8 and 1 <= m[10] <= 60 and 1 <= m[11] <= 60 and m[9] < 25):
+        bad.append("map header")
+    t = read(layout["TILESET_BANK"], 7)
+    blocks, collision = int.from_bytes(t[1:3], "little"), int.from_bytes(t[5:7], "little")
+    if not (0 < t[0] < banks and 0x4000 <= blocks < 0x8000 and collision < 0x8000):
+        bad.append("tileset pointers")
+    return bad
+
+
 class Gen1:
-    """Reads state and drives inputs for one English Red/Blue ROM inside an `Emulator`."""
+    """Reads state and drives inputs for one English Red, Blue or Yellow ROM (or a hack of their engine) inside an
+    `Emulator`. The version comes from the ROM itself: its tables are scanned for, Yellow is told by its header title,
+    and the first state read of a running game checks the WRAM layout against the game's own invariants."""
 
     ROMS, FAMILY, CORE, CORE_OPTIONS = ROMS, FAMILY, CORE, CORE_OPTIONS
     DEFAULT_OBJECTIVE, DEFAULT_CHECK, OBSERVATIONS = DEFAULT_OBJECTIVE, DEFAULT_CHECK, OBSERVATIONS
@@ -221,26 +290,51 @@ class Gen1:
 
     @classmethod
     def recognises(cls, rom: bytes) -> bool:
-        return hashlib.sha1(rom).hexdigest() in cls.ROMS
+        return find_tables(rom) is not None
 
     def __init__(self, rom: bytes):
-        sha1 = hashlib.sha1(rom).hexdigest()
-        if sha1 not in ROMS:
-            raise ValueError(f"unsupported ROM (sha1 {sha1}); supported: {ROMS}")
-        self.title = ROMS[sha1]
+        tables = find_tables(rom)
+        if tables is None:
+            raise ValueError(f"unsupported ROM (sha1 {hashlib.sha1(rom).hexdigest()}): not an English Gen 1 game")
+        header = rom[0x134:0x144].split(b"\0")[0].decode("ascii", "replace")
+        self.title = ROMS.get(hashlib.sha1(rom).hexdigest()) or f"Gen 1 ROM hack (header title {header})"
         self.rom = rom
-        self.species = [decode(self._rom(MONSTER_NAMES, 190 * 10)[i * 10 : i * 10 + 10]) for i in range(190)]
-        self.items = self._names(ITEM_NAMES, 0x61)
-        self.moves = self._names(MOVE_NAMES, 165)
-        pointers = self._rom(TYPE_NAMES, 2 * 0x1B)
-        self.types = [self._names((0x09, pointers[2 * i] | pointers[2 * i + 1] << 8), 1)[0] for i in range(0x1B)]
-        pairs = self._table(TILE_PAIR_COLLISIONS_LAND, 3)
+        self.yellow = "YELLOW" in header
+        self.layout = "yellow" if self.yellow else "red-blue"
+        self.ram = SimpleNamespace(**RAM_LAYOUTS[self.layout])
+        self.layout_checked = False  # set once a running game has confirmed (or replaced) the layout
+        if self.yellow:
+            self.CORE_OPTIONS, self.STARTERS, self.SIDE_QUESTS = (
+                YELLOW_CORE_OPTIONS,
+                YELLOW_STARTERS,
+                YELLOW_SIDE_QUESTS,
+            )
+            self.GLITCHES, self.map_names = YELLOW_GLITCHES, YELLOW_MAP_NAMES
+        else:
+            self.map_names = MAP_NAMES
+        self.species = [decode(self._rom(tables["species"], 190 * 10)[i * 10 : i * 10 + 10]) for i in range(190)]
+        self.items = self._names(tables["items"], 0x61)
+        self.moves = self._names(tables["moves"], 165)
+        bank, _ = tables["types"]
+        pointers = self._rom(tables["types"], 2 * 0x1B)
+        self.types = [self._names((bank, pointers[2 * i] | pointers[2 * i + 1] << 8), 1)[0] for i in range(0x1B)]
         self.tile_pairs = {}
-        for tileset, a, b in pairs:
+        for tileset, a, b in self._table(tables["tile_pairs"], 3):
             self.tile_pairs.setdefault(tileset, set()).update({(a, b), (b, a)})
         self.ledges = {
-            (FACING_CODES[f], standing, ledge): FACING_CODES[f] for f, standing, ledge, _ in self._table(LEDGE_TILES, 4)
+            (FACING_CODES[f], standing, ledge): FACING_CODES[f]
+            for f, standing, ledge, _ in self._table(tables["ledges"], 4)
         }
+
+    def check_layout(self, emu: Emulator) -> None:
+        """Once a game runs, confirm the WRAM layout the header suggested, or switch to the one that fits (hacks)."""
+        if self.layout_checked:
+            return
+        fits = [name for name, layout in RAM_LAYOUTS.items() if not layout_problems(emu.read, layout)]
+        if self.layout in fits or len(fits) == 1:
+            self.layout = self.layout if self.layout in fits else fits[0]
+            self.ram = SimpleNamespace(**RAM_LAYOUTS[self.layout])
+            self.layout_checked = True
 
     def _offset(self, where: tuple[int, int]) -> int:
         bank, addr = where
@@ -306,14 +400,15 @@ class Gen1:
         }
 
     def state(self, emu: Emulator) -> dict:
-        m = emu.read(CUR_MAP, 12)
+        self.check_layout(emu)
+        m = emu.read(self.ram.CUR_MAP, 12)
         map_id, y, x = m[0], m[3], m[4]
         tiles = self.screen_tiles(emu)
-        battle_kind = emu.read(IS_IN_BATTLE, 1)[0]
+        battle_kind = emu.read(self.ram.IS_IN_BATTLE, 1)[0]
         facing = FACING_CODES.get(emu.read(SPRITES1 + 9, 1)[0], "?")
         party = []
-        count = min(emu.read(PARTY_COUNT, 1)[0], 6)
-        mons, nicks = emu.read(PARTY_MONS, 44 * 6), emu.read(PARTY_NICKS, 11 * 6)
+        count = min(emu.read(self.ram.PARTY_COUNT, 1)[0], 6)
+        mons, nicks = emu.read(self.ram.PARTY_MONS, 44 * 6), emu.read(self.ram.PARTY_NICKS, 11 * 6)
         for i in range(count):
             mon = mons[i * 44 : i * 44 + 44]
             status = mon[4]
@@ -336,25 +431,26 @@ class Gen1:
                 }
             )
         bag = []
-        raw = emu.read(BAG_ITEMS, 2 * 20)
-        for i in range(min(emu.read(NUM_BAG_ITEMS, 1)[0], 20)):
+        raw = emu.read(self.ram.BAG_ITEMS, 2 * 20)
+        for i in range(min(emu.read(self.ram.NUM_BAG_ITEMS, 1)[0], 20)):
             bag.append({"item": self.item_name(raw[2 * i]), "qty": raw[2 * i + 1]})
         battle = None
         if battle_kind:
-            e = emu.read(ENEMY_SPECIES, 16)
+            e = emu.read(self.ram.ENEMY_SPECIES, 16)
             battle = {
                 "kind": {1: "wild", 2: "trainer"}.get(battle_kind, "lost"),
                 "enemy": self.species_name(e[0]),
-                "enemy_level": emu.read(ENEMY_LEVEL, 1)[0],
+                "enemy_level": emu.read(self.ram.ENEMY_LEVEL, 1)[0],
                 "enemy_hp": int.from_bytes(e[1:3]),
                 "enemy_pos": e[3],  # wEnemyMonPartyPos: which party member of the enemy is out
-                "enemy_max_hp": int.from_bytes(emu.read(ENEMY_MAX_HP, 2)),
+                "enemy_max_hp": int.from_bytes(emu.read(self.ram.ENEMY_MAX_HP, 2)),
             }
-        badges = emu.read(BADGES, 1)[0]
-        player_name = decode(emu.read(PLAYER_NAME, 11))
+        badges = emu.read(self.ram.BADGES, 1)[0]
+        player_name = decode(emu.read(self.ram.PLAYER_NAME, 11))
+        in_game = bool(m[10] and m[11]) and bool(player_name) and "·" not in player_name
         return {
             "map_id": map_id,
-            "map": MAP_NAMES[map_id] if map_id < len(MAP_NAMES) else f"map {map_id:#04x}",
+            "map": self.map_names[map_id] if map_id < len(self.map_names) else f"map {map_id:#04x}",
             "x": x,
             "y": y,
             "facing": facing,
@@ -362,27 +458,29 @@ class Gen1:
             "screen": self.screen_mode(tiles, bool(battle_kind)),
             "screen_text": [line for line in self.screen_text(tiles) if line.strip()],
             "player_name": player_name,
-            "rival_name": decode(emu.read(RIVAL_NAME, 11)),
+            "rival_name": decode(emu.read(self.ram.RIVAL_NAME, 11)),
             "party": party,
             "bag": bag,
-            "money": bcd(emu.read(MONEY, 3)),
+            "money": bcd(emu.read(self.ram.MONEY, 3)),
             "badges": badges.bit_count(),
             "badge_bits": badges,
             # Looking at a starter's ball in Oak's Lab sets four owned flags while its Pokédex entry is shown (seen as
             # a "4 species owned" milestone in live run 2); nothing is owned before the party has a member.
-            "dex_owned": sum(b.bit_count() for b in emu.read(DEX_OWNED, 19)) if party else 0,
-            "dex_seen": sum(b.bit_count() for b in emu.read(DEX_SEEN, 19)),
+            "dex_owned": sum(b.bit_count() for b in emu.read(self.ram.DEX_OWNED, 19)) if party else 0,
+            "dex_seen": sum(b.bit_count() for b in emu.read(self.ram.DEX_SEEN, 19)),
             "battle": battle,
             # Before a game is started or loaded, WRAM holds power-on noise (SameBoy randomises it) or zeros.
-            "in_game": bool(m[10] and m[11]) and bool(player_name) and "·" not in player_name,
+            "in_game": in_game,
+            # a running game that fits no known layout (a hack that moved WRAM): the values may be wrong
+            "layout_unverified": in_game and not self.layout_checked,
         }
 
     def grid(self, emu: Emulator) -> Grid:
-        m = emu.read(CUR_MAP, 12)
+        m = emu.read(self.ram.CUR_MAP, 12)
         tileset, height, width = m[9], m[10], m[11]
         stride = width + 6
         blocks = emu.read(OVERWORLD_MAP, stride * (height + 6))
-        t = emu.read(TILESET_BANK, 7)
+        t = emu.read(self.ram.TILESET_BANK, 7)
         bank, blocks_ptr, coll_ptr = t[0], int.from_bytes(t[1:3], "little"), int.from_bytes(t[5:7], "little")
         passable = frozenset(row[0] for row in self._table((0, coll_ptr), 1))
         tiles = [[0] * width * 2 for _ in range(height * 2)]
@@ -395,11 +493,11 @@ class Gen1:
                         tiles[by * 2 + sy][bx * 2 + sx] = cells[(2 * sy + 1) * 4 + 2 * sx]
         sprites = set()
         s1, s2 = emu.read(SPRITES1, 256), emu.read(SPRITES2, 256)
-        for i in range(1, 16):
+        for i in range(1, PIKACHU_SLOT if self.yellow else 16):  # Yellow's follower never blocks
             if s1[i * 16] and s1[i * 16 + 2] != 0xFF:
                 sprites.add((s2[i * 16 + 5] - 4, s2[i * 16 + 4] - 4))
-        n = min(emu.read(NUM_WARPS, 1)[0], 32)
-        raw = emu.read(WARPS, 4 * n) if n else b""
+        n = min(emu.read(self.ram.NUM_WARPS, 1)[0], 32)
+        raw = emu.read(self.ram.WARPS, 4 * n) if n else b""
         warps = {(raw[4 * i + 1], raw[4 * i]) for i in range(n)}
         return Grid(
             width * 2,
@@ -410,7 +508,7 @@ class Gen1:
             self.ledges if tileset == 0 else {},  # ledges exist only in the overworld tileset
             sprites,
             warps,
-            emu.read(GRASS_TILE, 1)[0],
+            emu.read(self.ram.GRASS_TILE, 1)[0],
         )
 
     # ---- scoring and checks ----
@@ -460,7 +558,10 @@ class Gen1:
                 + f".\nScreen text:\n{text}"
             )
         width, height = state["map_size"]
-        lines = [
+        lines = ["Note: this game's memory layout is unknown; the values below may be wrong."] * state.get(
+            "layout_unverified"
+        )
+        lines += [
             f"Map: {state['map']} (id {state['map_id']:#04x}, {width}x{height} steps); you are at "
             f"({state['x']},{state['y']}) facing {state['facing']}. Screen: {screen['mode']}"
             + (f" ({', '.join(flags)})" if flags else "")
@@ -509,13 +610,13 @@ class Gen1:
             emu.run([], 4)
 
     def _position(self, emu: Emulator) -> tuple[int, int, int]:
-        m = emu.read(CUR_MAP, 5)
+        m = emu.read(self.ram.CUR_MAP, 5)
         return m[0], m[4], m[3]
 
     def _settle(self, emu: Emulator, limit: int = 60) -> None:
         """Run frames until the walk animation is over."""
         for _ in range(limit):
-            if not emu.read(WALK_COUNTER, 1)[0]:
+            if not emu.read(self.ram.WALK_COUNTER, 1)[0]:
                 return
             emu.run([], 1)
 
@@ -534,14 +635,14 @@ class Gen1:
         blocks = emu.read(OVERWORLD_MAP, 64)
         for _ in range(24):
             emu.run([direction], 1)
-            if self._position(emu) != start or emu.read(WALK_COUNTER, 1)[0]:
+            if self._position(emu) != start or emu.read(self.ram.WALK_COUNTER, 1)[0]:
                 break
         self._settle(emu)
         emu.run([], 2)
         now = self._position(emu)
         if now[0] != start[0]:
             self._settle_map(emu, blocks)
-        if emu.read(IS_IN_BATTLE, 1)[0]:
+        if emu.read(self.ram.IS_IN_BATTLE, 1)[0]:
             return "battle"
         tiles = self.screen_tiles(emu)
         if self.screen_mode(tiles, False)["mode"] != "overworld":
@@ -645,7 +746,7 @@ class Gen1:
         last = None
         for _ in range(max_presses * 40):
             tiles = self.screen_tiles(emu)
-            mode = self.screen_mode(tiles, bool(emu.read(IS_IN_BATTLE, 1)[0]))
+            mode = self.screen_mode(tiles, bool(emu.read(self.ram.IS_IN_BATTLE, 1)[0]))
             if mode["cursor"]:
                 return {"outcome": "menu", "presses": presses}
             if mode["mode"] == "overworld":
