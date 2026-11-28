@@ -9,9 +9,11 @@ input; RAM is only read.
 """
 
 import hashlib
+import re
 import struct
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import SimpleNamespace
 
 from pokeagent.emulator.client import Emulator
@@ -307,6 +309,22 @@ LEDGE_MARKS = {"down": "v", "left": "<", "right": ">", "up": "^"}
 REACT_FRAMES = 12
 
 
+def load_map_names(family: str) -> dict[tuple[int, int], str]:
+    """pret's map identifiers by (group, number) for a layout family: identifiers only, no game text."""
+    lines = Path(__file__).with_name(f"gen3_map_names_{family}.txt").read_text().splitlines()
+    return {(int(g), int(n)): name for g, n, name in (line.split() for line in lines)}
+
+
+def words(identifier: str) -> str:
+    """ "LittlerootTown_BrendansHouse_1F" as "Littleroot Town - Brendans House - 1F"."""
+    spaced = r"(?<=[a-z])(?=[A-Z0-9])|(?<=[0-9])(?=[A-Z][a-z])|(?<=[A-Z])(?=[A-Z][a-z])"
+    return " - ".join(re.sub(spaced, " ", part) for part in identifier.split("_"))
+
+
+def squash(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
 def decode(data: bytes) -> str:
     return tables.decode(data)
 
@@ -396,7 +414,7 @@ class Grid:
         return self.width + 15
 
     def _at(self, x: int, y: int) -> int | None:
-        if not (-7 <= x < self.width + 8 and -7 <= y < self.height + 7):
+        if not self.tiles or not (-7 <= x < self.width + 8 and -7 <= y < self.height + 7):
             return None
         return (y + 7) * self.stride + x + 7
 
@@ -541,6 +559,7 @@ class Gen3:
         else:
             self.sections = tables.pointed_names(rom, found["maps"], 213, 8, 4)
             self.first_section = 0
+        self.map_names = load_map_names(self.family)
         self._behaviours: dict[tuple[int, int], list[int]] = {}
 
     # ---- names ----
@@ -553,6 +572,16 @@ class Gen3:
 
     def move_name(self, index: int) -> str:
         return self.moves[index] if 0 < index < len(self.moves) else ""
+
+    def map_name(self, group: int, number: int, section: int) -> str:
+        """The map's own name (pret's identifier, so every room differs) when it fits the section the header names (a
+        build that does not match pret's map lists would name the wrong rooms); else the section and group.number."""
+        ident = self.map_names.get((group, number))
+        area = self.section_name(section)
+        head = squash(ident.split("_")[0]) if ident else ""
+        if ident and head and (head in squash(area) or squash(area) in head):
+            return words(ident)
+        return f"{area} ({group}.{number})"
 
     def section_name(self, section: int) -> str:
         index = section - self.first_section
@@ -723,6 +752,9 @@ class Gen3:
         sb1, sb2 = self._blocks(emu)
         name = emu.read(sb2, L.PLAYER_NAME_SIZE) if sb2 else b""
         in_game = bool(sb1 and sb2 and valid_name(name) and not problems)
+        header = emu.read(L.MAP_HEADER, 0x1C)
+        if in_game and not self._map_loaded(header, struct.unpack("<iiI", emu.read(L.MAP_LAYOUT, 12))):
+            in_game = False  # named, but no map loaded yet (the intro, the naming screen)
         state = {
             "map_id": 0,
             "map": "",
@@ -750,7 +782,6 @@ class Gen3:
             state |= {"screen": {k: v for k, v in screen.items() if k not in ("text", "printing", "busy")}}
             state["screen_text"] = screen["text"]
             return state
-        header = emu.read(L.MAP_HEADER, 0x1C)
         x, y, group, number = struct.unpack("<hhbb", emu.read(sb1, 4) + emu.read(sb1 + 4, 2))
         layout = struct.unpack("<ii", emu.read(L.MAP_LAYOUT, 8))
         screen = self._screen(emu, in_battle, True)
@@ -773,7 +804,7 @@ class Gen3:
         facing = FACING.get(emu.read(L.OBJECTS + player * 0x24 + 0x18, 1)[0] & 15, "?")
         state |= {
             "map_id": group << 8 | number,
-            "map": self.section_name(header[0x14]),
+            "map": self.map_name(group, number, header[0x14]),
             "x": x,
             "y": y,
             "facing": facing,
@@ -811,19 +842,41 @@ class Gen3:
 
     # ---- the map ----
 
+    def _rom_at(self, pointer: int, size: int = 1) -> int | None:
+        """The file offset of a ROM pointer, or None when `size` bytes there are not in the ROM."""
+        offset = pointer - 0x08000000
+        return offset if offset >= 0 and offset + size <= len(self.rom) and pointer >> 24 == 8 else None
+
+    def _map_loaded(self, header: bytes, layout: tuple[int, int, int]) -> bool:
+        """Whether the game has loaded a map: the header's layout and events pointers are in the ROM and the map grid
+        has a sane size in EWRAM (during the intro and the naming screen the header is still empty)."""
+        width, height, grid = layout
+        events = struct.unpack_from("<I", header, 4)[0]
+        return (
+            self._rom_at(struct.unpack_from("<I", header, 0)[0], 0x18) is not None
+            and self._rom_at(events, 12) is not None
+            and 0 < width <= 500
+            and 0 < height <= 500
+            and grid in EWRAM
+        )
+
     def _tileset_behaviours(self, layout_pointer: int) -> list[int]:
         """The behaviour of every metatile (primary tileset, then secondary) of the map layout at ROM `pointer`."""
         if layout_pointer in self._behaviours:
             return self._behaviours[layout_pointer]
         rom, frlg = self.rom, self.family == "frlg"
-        base = layout_pointer - 0x08000000
-        primary, secondary = (int.from_bytes(rom[base + o : base + o + 4], "little") - 0x08000000 for o in (0x10, 0x14))
+        base = self._rom_at(layout_pointer, 0x18)
+        if base is None:
+            return []
         out: list[int] = []
-        for tileset, count in ((primary, 640 if frlg else 512), (secondary, 384 if frlg else 512)):
-            where = int.from_bytes(
-                rom[tileset + (0x14 if frlg else 0x10) : tileset + (0x18 if frlg else 0x14)], "little"
+        for o, count in ((0x10, 640 if frlg else 512), (0x14, 384 if frlg else 512)):
+            tileset = self._rom_at(int.from_bytes(rom[base + o : base + o + 4], "little"), 0x18)
+            where = self._rom_at(
+                int.from_bytes(rom[tileset + (0x14 if frlg else 0x10) :][:4], "little") if tileset is not None else 0,
+                4 * count,
             )
-            where -= 0x08000000
+            if tileset is None or where is None:
+                return []
             if frlg:
                 out += [int.from_bytes(rom[where + 4 * i : where + 4 * i + 4], "little") & 0x1FF for i in range(count)]
             else:
@@ -834,18 +887,24 @@ class Gen3:
     def grid(self, emu: Emulator) -> Grid:
         L = self.layout
         width, height, pointer = struct.unpack("<iiI", emu.read(L.MAP_LAYOUT, 12))
+        header = emu.read(L.MAP_HEADER, 0x1C)
+        if not self._map_loaded(header, (width, height, pointer)):
+            return Grid(0, 0, [], [])  # no map yet: nothing to walk on
         raw = b"".join(
             emu.read(pointer + o, min(0x10000, 2 * width * height - o)) for o in range(0, 2 * width * height, 0x10000)
         )
         cells = list(struct.unpack(f"<{width * height}H", raw))
-        header = emu.read(L.MAP_HEADER, 0x1C)
         rom_layout = struct.unpack_from("<I", header, 0)[0]
         metatiles = self._tileset_behaviours(rom_layout)
         behaviours = [metatiles[c & 0x3FF] if (c & 0x3FF) < len(metatiles) else 0 for c in cells]
-        events = struct.unpack_from("<I", header, 4)[0] - 0x08000000
-        warp_count = self.rom[events + 1]
-        warps_at = int.from_bytes(self.rom[events + 8 : events + 12], "little") - 0x08000000
-        warps = {struct.unpack_from("<hh", self.rom, warps_at + 8 * i) for i in range(min(warp_count, 64))}
+        events = self._rom_at(struct.unpack_from("<I", header, 4)[0], 12)
+        warp_count = min(self.rom[events + 1], 64)
+        warps_at = self._rom_at(int.from_bytes(self.rom[events + 8 : events + 12], "little"), 8 * warp_count)
+        warps = (
+            {struct.unpack_from("<hh", self.rom, warps_at + 8 * i) for i in range(warp_count)}
+            if warps_at is not None
+            else set()
+        )
         sprites = set()
         objects = emu.read(L.OBJECTS, 16 * 0x24)
         for i in range(16):

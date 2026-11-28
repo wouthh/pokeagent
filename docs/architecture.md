@@ -121,6 +121,14 @@ pokefirered symbol files, by family (`rs`, `e`, `frlg`); names come from the use
   (the pointers move, so every `state` dereferences them). The layout probe checks that `gMain.callback2` is a ROM
   pointer and the save block pointers point into EWRAM; a hack that moved RAM (ROWE) then gets a state that says so
   instead of garbage. Hacks whose names are not in capitals (ROWE, Radical Red) are not recognised at all.
+- **Map names.** The header's section (a whole town) is too coarse: every house and the lab are "LITTLEROOT TOWN".
+  `gen3_map_names_{rs,e,frlg}.txt` hold pret's map identifiers by group and number (identifiers only, no game text, like
+  `gen1_map_names.txt`), shown as "Littleroot Town - Brendans House - 1F". A map whose identifier does not fit the
+  section the ROM names (a build that does not match pret) shows as "SECTION (group.number)", as does a map pret
+  does not list.
+- **No map, no game.** During the intro and the naming screen the save blocks and the name are set but the map header is
+  still empty, so `in_game` also needs a loaded map (header pointers in the ROM, a sane grid size in EWRAM); `grid`
+  returns an empty grid for an invalid header instead of reading outside the ROM.
 - **Pokémon:** `decode_mon` decrypts the four data blocks (order by personality mod 24, XOR with personality and
   trainer id, checksum) and reports species, level, HP, status, moves with PP and PP Ups, experience, stats, EVs, IVs,
   nature, ability, held item and types (from the base stats). Money and bag quantities are XORed with the save block
