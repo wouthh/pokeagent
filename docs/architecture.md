@@ -394,6 +394,9 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
 - Map events can start a few frames after a step ends (Oak's event in Pallet Town), so a walk can report `arrived`
   with a dialog appearing right after it; tool results show the screen after a short settle.
 - Red and Blue swap the preset names (RED/BLUE versus BLUE/RED).
+- Looking at a starter's ball in Oak's Lab sets four Pokédex owned flags while its entry is shown, before the player
+  has a Pokémon. The adapter reports nothing owned while the party is empty (live run 2 recorded a false
+  "4 species owned" milestone before this).
 - A menu or prompt that accepted a press keeps its box and cursor on screen for about 16 frames. `press` therefore
   waits until the screen changes (up to 32 frames); with a fixed 12-frame wait, live run 1a saw stale menus and
   pressed again, believing its input had been dropped. Hold length does not matter: 1 to 6 frames are all accepted.
