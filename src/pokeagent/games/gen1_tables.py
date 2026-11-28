@@ -3,7 +3,7 @@
 Every table is located by facts in the ROM itself, not by a per-dump address: the species names are the one run of
 190 ten-byte text records, the move and item names are the 0x50-terminated strings that start with POUND and MASTER
 BALL, the type names are reached through the little-endian pointers to NORMAL, FIGHTING and FLYING, and the tile
-pair and ledge tables by their first rows. A ROM where any of them is missing is not an English Gen 1 game.
+pair and ledge tables by the shape of their rows. A ROM where any of them is missing is not an English Gen 1 game.
 """
 
 import re
@@ -21,12 +21,23 @@ _CLASS = bytes(ord("T") if b in _TEXT else ord("P") if b == 0x50 else ord("x") f
 _RECORD = "(?:T{10}|" + "|".join(f"T{{{n}}}P{{{10 - n}}}" for n in range(1, 10)) + ")"
 _SPECIES_RUN = re.compile(f"(?:{_RECORD}){{190}}".encode())
 SPECIES_COUNT, ITEM_COUNT, MOVE_COUNT, TYPE_COUNT = 190, 0x61, 165, 0x1B
-LAND_PAIRS = bytes.fromhex("11 20 05 11 41 05 03 30 2e")  # first rows: CAVERN 20/05, 41/05, FOREST 30/2E
-LEDGES = bytes.fromhex("00 2c 37 80 00 39 36 80 00 39 37 80")  # first rows: facing down, 2C/37, 39/36, 39/37
+# ledge rows are (facing, standing tile, ledge tile, joypad bit) where the joypad bit matches the facing, then 0xFF
+_LEDGES = re.compile(rb"(?:\x00.{2}\x80|\x04.{2}\x40|\x08.{2}\x20|\x0c.{2}\x10){3,}\xff", re.S)
+# tile-pair rows are (tileset, tile, tile) then 0xFF; the table is the longest such run in the home bank
+_PAIRS = re.compile(rb"(?:[\x00-\x17].{2}){6,}\xff", re.S)
 
 
 def _enc(text: str) -> bytes:
     return bytes(_CHARS[c] for c in text)
+
+
+def _tile_pairs(rom: bytes) -> int | None:
+    runs = [m for m in _PAIRS.finditer(rom[:0x4000])]
+    return max(runs, key=lambda m: m.end() - m.start()).start() if runs else None
+
+
+def _ledges(rom: bytes) -> int | None:
+    return m.start() if (m := _LEDGES.search(rom)) else None
 
 
 def where(offset: int) -> Where:
@@ -70,7 +81,7 @@ def find_tables(rom: bytes) -> dict[str, Where] | None:
         "items": _name_list(rom, "MASTER BALL", ITEM_COUNT),
         "moves": _name_list(rom, "POUND", MOVE_COUNT),
         "types": _types(rom),
-        "tile_pairs": rom.find(LAND_PAIRS),
-        "ledges": rom.find(LEDGES),
+        "tile_pairs": _tile_pairs(rom),
+        "ledges": _ledges(rom),
     }
-    return None if any(v is None or v < 0 for v in found.values()) else {k: where(v) for k, v in found.items()}
+    return None if any(v is None for v in found.values()) else {k: where(v) for k, v in found.items()}
