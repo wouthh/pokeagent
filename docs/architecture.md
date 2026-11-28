@@ -904,3 +904,10 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
   so the guard made a running game read as "no game in progress" with `in_battle` flickering. The guard is removed; the
   state reads are the same for any SVBK. Ruled out: reading the core's whole SYSTEM_RAM (it has all 8 banks, but D000
   already is bank 1) and keeping the last good state (it would hide a real power-on).
+- **2026-11-28: A Gen 2 step waits out a running script.** A wild encounter starts a ~140-frame transition in which
+  `wBattleMode` is still 0, the screen still looks like the overworld and the block memory behind `grid` is overwritten.
+  A live Gold session saw `walk_to` return "unreachable" with a garbage "Nearby" crop four times, and the grid stayed
+  garbage until the battle began. `Gen2.step` now waits (up to 400 frames) while `wScriptRunning` (0xFF) is set, also
+  after a "blocked" step (the encounter can start before the step is taken), and returns "battle" or "dialog" instead.
+  Checked live over 70 `walk_to` calls across Route 29 grass in Gold and in Crystal (20 and 16 battles, every one
+  reported as "battle", none unreachable); the same sequence failed before.
