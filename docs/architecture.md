@@ -433,6 +433,29 @@ From throwaway spikes on 2026-11-27 (Fedora 44 x86_64, bwrap 0.12.0, Claude CLI 
   validator caught. The web hook blocked three fetches of pret disassembly files as token-like: the slashes of the
   path made one long base64 run. A slash now ends a run.
 
+**Live run 2 (2026-11-27, phase 8: Red from power-on, 20 sessions, same data dir as run 1)**
+
+- 1,921 actions, 1.5 million tokens and $29.04 in 20 sessions, without intervention, usage limit waits or restores.
+  It reached Route 9 with three badges and seven species owned. Its briefs carried the efficiency lines (PR 28).
+- Reuse (A14): run 1's capabilities were active from the first session. 316 of run 2's 350 capability calls went to
+  19 of run 1's macros, none failed, and the agent added 11 definitions of its own. Its knowledge searches returned
+  15 of run 1's 33 ROM-scoped entries (routes, the S.S. Anne, Rock Tunnel, macro lessons).
+- `stats --compare` lines up the runs by milestone. Run 1's first three sessions (299 actions, $3.31) predate the
+  event store, so its totals below include them by hand; its first milestones before Pewter City are not comparable.
+
+  | milestone | run 2: session, actions, cost | run 1: session, actions, cost |
+  |---|---|---|
+  | badge 1 | 3, 253, $3.64 | 5, 406, $5.64 |
+  | badge 2 | 6, 534, $8.00 | 8, 752, $10.38 |
+  | badge 3 | 18, 1,684, $25.87 | 18, 1,734, $24.31 |
+
+  Run 2 reached the first two badges with about 30% fewer actions. Between Cerulean and Vermilion it lost the
+  difference: with a weaker team it blacked out on Route 25 and Route 6 and took two sessions to recover.
+- No session requested development (A13), now with the efficiency lines in the brief: 57 sessions with the tools
+  across both runs, no request (#26).
+- Its first "4 species owned" milestone was false: looking at a starter's ball sets four owned flags (fixed in
+  PR 29, after the run started).
+
 **Sandbox (bwrap)**
 
 - libretro runs unchanged under `bwrap --unshare-all --die-with-parent --new-session --clearenv` with:
