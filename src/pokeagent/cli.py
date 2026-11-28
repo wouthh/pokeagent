@@ -88,6 +88,8 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--out", type=Path, help="where to write it (default: <ROM name>.sav in the run folder)")
     export.add_argument("--force", action="store_true", help="replace --out if it exists")
     export.add_argument("--data-dir", type=Path, help="where runs live (default ~/.local/share/pokeagent)")
+    runs = commands.add_parser("runs", help="list the runs and where each one's game stands")
+    runs.add_argument("--data-dir", type=Path, help="where runs live (default ~/.local/share/pokeagent)")
     status = commands.add_parser("status", help="where a run stands")
     stats = commands.add_parser("stats", help="per-session metrics of a run, optionally compared with another")
     stats.add_argument("--compare", metavar="RUN", help="another run of the same data dir, compared at milestones")
@@ -227,6 +229,10 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError, RuntimeError) as e:  # includes SandboxError and EmulatorError
             print(f"pokeagent: {e}", file=sys.stderr)
             return 1
+    elif args.command == "runs":
+        from pokeagent import play
+
+        print(play.list_runs(args.data_dir or play.default_data_dir()))
     elif args.command in ("status", "stats"):
         from pokeagent import play, stats
 

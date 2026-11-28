@@ -912,3 +912,18 @@ def test_headless_runs_need_no_tk(monkeypatch):
     shown, page = play_module._viewer(False, ("127.0.0.1", 0))
     page.shutdown()
     assert shown.frame is None
+
+
+def test_runs_are_listed_with_where_their_game_stands(game, rom_path, tmp_path, capsys):
+    from pokeagent import cli
+
+    _, _, bedroom = game
+    assert play_module.list_runs(tmp_path) == f"no runs in {tmp_path / 'runs'}"
+    first = new_run(rom_path, None, tmp_path)
+    first.rename(first.with_name("20260101-000000"))  # run ids are timestamps to the second
+    played = new_run(rom_path, None, tmp_path)
+    (played / "recovery.state").write_bytes(bedroom)
+    assert cli.main(["runs", "--data-dir", str(tmp_path)]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == "20260101-000000  stopped; 0 sessions, 0 actions; not started"
+    assert lines[1].startswith(played.name) and lines[1].endswith("Reds House 2F, 0 badges, no Pokémon yet")
