@@ -448,3 +448,14 @@ def test_find_tables_rejects_a_record_run_cut_off_by_the_rom_end():
     rom[-64] = 1
     rom[-32] = 2
     assert find_tables(bytes(rom)) is None
+
+
+def test_press_settles_before_returning(game):
+    # The START menu opens over ~40 frames and takes no input before that: an immediate DOWN must still move it.
+    gen2, emu, start = game
+    emu.load_state(start)
+    gen2.press(emu, "start")
+    row = gen2.state(emu)["screen"]["cursor_at"][1]
+    gen2.press(emu, "down")
+    gen2.press(emu, "down")
+    assert gen2.state(emu)["screen"]["cursor_at"][1] == row + 4
